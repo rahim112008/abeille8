@@ -1,0 +1,41 @@
+# ════════════════════════════════════════════════════════════════
+# ApiTrack Pro v3.0 ULTIMATE — requirements.txt
+# Gestion apicole professionnelle · Python 3.10+
+# ════════════════════════════════════════════════════════════════
+
+# ── Core Framework ───────────────────────────────────────────────
+streamlit>=1.35.0
+
+# ── Data & Calcul ────────────────────────────────────────────────
+pandas>=2.2.0
+numpy>=1.26.0
+
+# ── Visualisation ────────────────────────────────────────────────
+plotly>=5.22.0
+
+# ── Cartographie ─────────────────────────────────────────────────
+folium>=0.16.0
+streamlit-folium>=0.20.0
+
+# ── Intelligence Artificielle ─────────────────────────────────────
+# Fournisseur principal (Claude)
+anthropic>=0.28.0
+
+# ── Deep Learning (optionnel — Morphométrie avancée) ─────────────
+# Décommentez si vous souhaitez activer la classification TensorFlow
+# tensorflow>=2.15.0
+
+# ── Imagerie Satellitaire (optionnel — NDVI/SentinelHub) ─────────
+# Décommentez uniquement si vous avez un compte SentinelHub
+# sentinelhub>=3.9.0
+
+# ── Bibliothèques standard Python (incluses par défaut) ──────────
+# sqlite3   ← inclus dans Python standard
+# hashlib   ← inclus dans Python standard
+# json      ← inclus dans Python standard
+# base64    ← inclus dans Python standard
+# datetime  ← inclus dans Python standard
+# os        ← inclus dans Python standard
+# pathlib   ← inclus dans Python standard
+# urllib    ← inclus dans Python standard
+# re        ← inclus dans Python standard
