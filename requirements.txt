@@ -1,27 +1,27 @@
 # Interface et traitement de données
-streamlit>=1.28.0
-pandas>=2.0.0
-numpy>=1.24.0
+streamlit
+pandas
+numpy
 
 # Visualisation et cartographie
-plotly>=5.17.0
-folium>=0.14.0
-streamlit-folium>=0.15.0
+plotly
+folium
+streamlit-folium
 
 # Intelligence artificielle (fournisseurs multiples)
-anthropic>=0.25.0
+anthropic
 
 # Vision par ordinateur et deep learning (optionnel)
-tensorflow>=2.13.0
-Pillow>=10.0.0
+tensorflow
+Pillow
 
 # Données satellites (optionnel)
-sentinelhub>=3.10.0
+sentinelhub
 
 # Fonctionnalités avancées (assistant vocal, généalogie)
-speechrecognition>=3.10.0
-gtts>=2.3.0
-pygame>=2.5.0
-networkx>=3.1
+speechrecognition
+gtts
+pygame
+networkx
 
 # Utilitaires (base64, json, etc. sont dans la bibliothèque standard)
