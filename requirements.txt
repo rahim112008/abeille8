@@ -1,27 +1,16 @@
-# Interface et traitement de données
+
 streamlit
 pandas
 numpy
-
-# Visualisation et cartographie
 plotly
 folium
 streamlit-folium
-
-# Intelligence artificielle (fournisseurs multiples)
 anthropic
-
-# Vision par ordinateur et deep learning (optionnel)
 tensorflow
 Pillow
-
-# Données satellites (optionnel)
 sentinelhub
-
-# Fonctionnalités avancées (assistant vocal, généalogie)
 speechrecognition
 gtts
 pygame
 networkx
 
-# Utilitaires (base64, json, etc. sont dans la bibliothèque standard)
