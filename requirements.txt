@@ -2,7 +2,10 @@
 # ApiTrack Pro v3.0 ULTIMATE — requirements.txt
 # Gestion apicole professionnelle · Python 3.10+
 # ════════════════════════════════════════════════════════════════
-
+networkx
+speechrecognition 
+gtts 
+pygame
 # ── Core Framework ───────────────────────────────────────────────
 streamlit>=1.35.0
 
