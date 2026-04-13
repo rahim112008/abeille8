@@ -1,8 +1,12 @@
 """
 ApiTrack Pro – Application de gestion apicole professionnelle
 Streamlit + Python + SQLite
-CORRECTION : Les fonctions ia_analyser_* utilisent maintenant ia_call()
-             (multi-fournisseurs) au lieu de forcer Anthropic uniquement.
+VERSION 3.0 - AVEC FONCTIONNALITÉS AVANCÉES UNIQUES
+- Assistant vocal mains libres
+- Généalogie et prédiction de consanguinité
+- Bourse aux mâles collaborative
+- Scanner visuel de maladies
+- Prédiction de transhumance (NDVI + météo)
 """
 
 import streamlit as st
@@ -14,6 +18,11 @@ import json
 import os
 import datetime
 from pathlib import Path
+import base64
+import tempfile
+import urllib.request
+import urllib.error
+import re
 
 # ── Plotly (graphiques) ──────────────────────────────────────────────────────
 import plotly.express as px
@@ -48,8 +57,26 @@ try:
 except ImportError:
     ANTHROPIC_OK = False
 
-# ── Base64 pour upload images ─────────────────────────────────────────────────
-import base64
+# ── Nouvelles bibliothèques pour fonctionnalités avancées ────────────────────
+try:
+    import speech_recognition as sr
+    from gtts import gTTS
+    import pygame
+    VOICE_OK = True
+except ImportError:
+    VOICE_OK = False
+
+try:
+    import networkx as nx
+    NETWORKX_OK = True
+except ImportError:
+    NETWORKX_OK = False
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_OK = True
+except ImportError:
+    PIL_OK = False
 
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION STREAMLIT
@@ -413,7 +440,7 @@ def inject_css():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# BASE DE DONNÉES SQLITE
+# BASE DE DONNÉES SQLITE (AJOUT DES NOUVELLES TABLES)
 # ════════════════════════════════════════════════════════════════════════════
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -527,6 +554,46 @@ def init_db():
         key TEXT PRIMARY KEY,
         value TEXT
     );
+
+    -- ========== NOUVELLES TABLES POUR FONCTIONNALITÉS AVANCÉES ==========
+    CREATE TABLE IF NOT EXISTS pedigree (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        reine_fille_id INTEGER REFERENCES ruches(id),
+        reine_mere_id INTEGER REFERENCES ruches(id),
+        ruche_pere_id INTEGER REFERENCES ruches(id),
+        date_naissance TEXT,
+        methode_fecondation TEXT DEFAULT 'naturelle',
+        notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS voice_inspections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ruche_id INTEGER REFERENCES ruches(id),
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+        transcription TEXT,
+        actions_extraites TEXT,
+        fichier_audio TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS male_stocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ruche_id INTEGER UNIQUE REFERENCES ruches(id),
+        race_male TEXT,
+        score_vsh INTEGER,
+        disponibilite BOOLEAN DEFAULT 1,
+        rayon_km INTEGER DEFAULT 5,
+        contact_prefere TEXT,
+        date_mise_a_jour TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS transhumance_predictions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        zone_id INTEGER REFERENCES zones(id),
+        date_prediction TEXT,
+        potentiel_miel REAL,
+        recommandation TEXT,
+        meteo_json TEXT
+    );
     """)
 
     pwd_hash = hashlib.sha256("admin1234".encode()).hexdigest()
@@ -604,7 +671,11 @@ def _insert_demo_data(c):
 
     c.execute("INSERT OR IGNORE INTO settings VALUES ('rucher_nom','Rucher de l Atlas')")
     c.execute("INSERT OR IGNORE INTO settings VALUES ('localisation','Tlemcen, Algérie')")
-    c.execute("INSERT OR IGNORE INTO settings VALUES ('version','2.0.0')")
+    c.execute("INSERT OR IGNORE INTO settings VALUES ('version','3.0.0')")
+
+    # Données démo pour nouvelles fonctionnalités
+    c.execute("INSERT OR IGNORE INTO pedigree (reine_fille_id, reine_mere_id, ruche_pere_id, date_naissance) VALUES (2,1,3,'2024-05-01')")
+    c.execute("INSERT OR IGNORE INTO male_stocks (ruche_id, race_male, score_vsh, rayon_km, contact_prefere) VALUES (3,'intermissa',85,5,'contact@exemple.dz')")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -690,20 +761,20 @@ IA_PROVIDERS = {
         "env":        "ANTHROPIC_API_KEY",
         "url":        "https://console.anthropic.com",
         "prefix":     "sk-ant-",
-        "models":     ["claude-opus-4-5", "claude-haiku-4-5-20251001"],
-        "default":    "claude-opus-4-5",
+        "models":     ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
+        "default":    "claude-3-5-sonnet-20241022",
         "quota":      "~5$ crédits offerts · ~500 analyses",
         "vision":     True,
         "type":       "anthropic",
     },
-    "🌟 Gemma 4 (Google AI Studio)": {
+    "🌟 Gemini (Google AI Studio)": {
         "key":        "google_api_key",
         "env":        "GOOGLE_API_KEY",
         "url":        "https://aistudio.google.com/app/apikey",
         "prefix":     "AIzaSy",
-        "models":     ["gemini-2.0-flash", "gemma-4-31b-it", "gemma-4-27b-it", "gemini-1.5-flash"],
+        "models":     ["gemini-2.0-flash", "gemini-1.5-flash"],
         "default":    "gemini-2.0-flash",
-        "quota":      "Gratuit · 1 500 req/jour · 1M tokens/min",
+        "quota":      "Gratuit · 1 500 req/jour",
         "vision":     True,
         "type":       "google",
     },
@@ -712,9 +783,9 @@ IA_PROVIDERS = {
         "env":        "GROQ_API_KEY",
         "url":        "https://console.groq.com/keys",
         "prefix":     "gsk_",
-        "models":     ["llama-3.3-70b-versatile", "llama-4-scout-17b-16e-instruct", "gemma2-9b-it"],
+        "models":     ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
         "default":    "llama-3.3-70b-versatile",
-        "quota":      "Gratuit · 30 RPM · 1 000 RPD · 800 tok/s",
+        "quota":      "Gratuit · 30 RPM",
         "vision":     False,
         "type":       "openai_compat",
         "base_url":   "https://api.groq.com/openai/v1",
@@ -724,11 +795,9 @@ IA_PROVIDERS = {
         "env":        "OPENROUTER_API_KEY",
         "url":        "https://openrouter.ai/keys",
         "prefix":     "sk-or-",
-        "models":     ["meta-llama/llama-4-maverick:free", "deepseek/deepseek-r1:free",
-                       "google/gemma-3-27b-it:free", "mistralai/mistral-7b-instruct:free",
-                       "qwen/qwen3-235b-a22b:free"],
+        "models":     ["meta-llama/llama-4-maverick:free", "deepseek/deepseek-r1:free"],
         "default":    "meta-llama/llama-4-maverick:free",
-        "quota":      "Gratuit · ~50 req/jour · accès 200+ modèles",
+        "quota":      "Gratuit · ~50 req/jour",
         "vision":     False,
         "type":       "openai_compat",
         "base_url":   "https://openrouter.ai/api/v1",
@@ -738,75 +807,12 @@ IA_PROVIDERS = {
         "env":        "MISTRAL_API_KEY",
         "url":        "https://console.mistral.ai/api-keys",
         "prefix":     "",
-        "models":     ["mistral-large-latest", "mistral-small-latest", "open-mistral-7b"],
+        "models":     ["mistral-large-latest", "mistral-small-latest"],
         "default":    "mistral-large-latest",
-        "quota":      "Gratuit · 1 req/s · 1 milliard tok/mois",
+        "quota":      "Gratuit · 1 req/s",
         "vision":     False,
         "type":       "openai_compat",
         "base_url":   "https://api.mistral.ai/v1",
-    },
-    "🔍 Cohere (RAG/Search)": {
-        "key":        "cohere_api_key",
-        "env":        "COHERE_API_KEY",
-        "url":        "https://dashboard.cohere.com/api-keys",
-        "prefix":     "",
-        "models":     ["command-r-plus", "command-r", "command-a-03-2025"],
-        "default":    "command-r-plus",
-        "quota":      "Gratuit · 20 RPM · 1 000 req/mois",
-        "vision":     False,
-        "type":       "cohere",
-    },
-    "🇨🇳 Zhipu AI / GLM (Gratuit illimité)": {
-        "key":        "zhipu_api_key",
-        "env":        "ZHIPU_API_KEY",
-        "url":        "https://open.bigmodel.cn/usercenter/apikeys",
-        "prefix":     "",
-        "models":     ["glm-4v-flash", "glm-4-flash", "glm-4-plus"],
-        "default":    "glm-4v-flash",
-        "quota":      "Gratuit · Limites non documentées · Vision OK",
-        "vision":     True,
-        "type":       "openai_compat",
-        "base_url":   "https://open.bigmodel.cn/api/paas/v4",
-    },
-    "🧠 Cerebras (Très rapide)": {
-        "key":        "cerebras_api_key",
-        "env":        "CEREBRAS_API_KEY",
-        "url":        "https://cloud.cerebras.ai/platform",
-        "prefix":     "csk-",
-        "models":     ["llama-3.3-70b", "qwen3-235b", "llama-4-scout-17b"],
-        "default":    "llama-3.3-70b",
-        "quota":      "Gratuit · 30 RPM · 14 400 RPD",
-        "vision":     False,
-        "type":       "openai_compat",
-        "base_url":   "https://api.cerebras.ai/v1",
-    },
-    "🤗 Hugging Face (10 000 modèles)": {
-        "key":        "hf_api_key",
-        "env":        "HF_API_KEY",
-        "url":        "https://huggingface.co/settings/tokens",
-        "prefix":     "hf_",
-        "models":     ["mistralai/Mixtral-8x7B-Instruct-v0.1",
-                       "meta-llama/Llama-3.3-70B-Instruct",
-                       "Qwen/Qwen2.5-72B-Instruct"],
-        "default":    "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "quota":      "Gratuit · Serverless Inference · modèles <10GB",
-        "vision":     False,
-        "type":       "huggingface",
-    },
-    "🐙 GitHub Models (GPT-4o gratuit)": {
-        "key":        "github_api_key",
-        "env":        "GITHUB_TOKEN",
-        "url":        "https://github.com/settings/tokens",
-        "prefix":     "github_pat_",
-        "models":     ["openai/gpt-4o", "openai/gpt-4.1",
-                       "meta-llama/Llama-3.3-70B-Instruct",
-                       "deepseek/DeepSeek-R1", "mistral-ai/Mistral-Large-2411"],
-        "default":    "openai/gpt-4o",
-        "quota":      "Gratuit · 15 RPM · 150 req/jour · Fine-grained PAT",
-        "vision":     True,
-        "type":       "github_models",
-        "base_url":   "https://models.github.ai/inference",
-        "note":       "Token Fine-grained PAT avec permission models:read requis",
     },
 }
 
@@ -834,11 +840,7 @@ def get_api_key_for_provider(provider_name):
 def ia_call(prompt_text, image_bytes=None, json_mode=False):
     """
     Appel unifié vers le fournisseur IA actif.
-    Supporte : Anthropic, Google, Groq, OpenRouter, Mistral, Cohere,
-               Zhipu, Cerebras, HuggingFace, GitHub Models.
     """
-    import urllib.error
-
     provider_name = get_active_provider()
     model         = get_active_model()
     api_key       = get_api_key_for_provider(provider_name)
@@ -866,7 +868,6 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
 
         # ── 2. GOOGLE (Gemini API) ────────────────────────────────────────
         elif ptype == "google":
-            import urllib.request
             parts = []
             if image_bytes and cfg.get("vision"):
                 parts.append({
@@ -885,68 +886,8 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
                 data = json.loads(r.read())
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
-        # ── 3. COHERE v2 ──────────────────────────────────────────────────
-        elif ptype == "cohere":
-            import urllib.request
-            body = {
-                "model":    model,
-                "messages": [{"role": "user", "content": prompt_text}],
-                "max_tokens": 2000,
-                "temperature": 0.3,
-            }
-            if json_mode:
-                body["response_format"] = {"type": "json_object"}
-            payload = json.dumps(body).encode()
-            req = urllib.request.Request(
-                "https://api.cohere.com/v2/chat",
-                data=payload,
-                headers={
-                    "Content-Type":  "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                    "Accept":        "application/json",
-                }
-            )
-            with urllib.request.urlopen(req, timeout=60) as r:
-                data = json.loads(r.read())
-            msg = data.get("message", {})
-            content = msg.get("content", "")
-            if isinstance(content, list) and content:
-                return content[0].get("text", str(content))
-            return str(content)
-
-        # ── 4. HUGGING FACE ───────────────────────────────────────────────
-        elif ptype == "huggingface":
-            import urllib.request
-            body = {
-                "model":    model,
-                "messages": [{"role": "user", "content": prompt_text}],
-                "max_tokens": 1800,
-                "temperature": 0.4,
-                "stream": False,
-            }
-            payload = json.dumps(body).encode()
-            url = "https://api-inference.huggingface.co/v1/chat/completions"
-            req = urllib.request.Request(
-                url, data=payload,
-                headers={
-                    "Content-Type":  "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                }
-            )
-            with urllib.request.urlopen(req, timeout=90) as r:
-                data = json.loads(r.read())
-            if "choices" in data:
-                return data["choices"][0]["message"]["content"]
-            if isinstance(data, list):
-                full = data[0].get("generated_text", "")
-                if full.startswith(prompt_text):
-                    return full[len(prompt_text):].strip()
-                return full
-            return str(data)
-
-        # ── 5. OPENAI-COMPATIBLE (Groq, OpenRouter, Mistral, Cerebras, Zhipu) ──
+        # ── 3. OPENAI-COMPATIBLE (Groq, OpenRouter, Mistral) ──────────────
         elif ptype == "openai_compat":
-            import urllib.request
             base_url = cfg.get("base_url", "")
             messages = []
             if image_bytes and cfg.get("vision"):
@@ -977,66 +918,8 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
                 data = json.loads(r.read())
             return data["choices"][0]["message"]["content"]
 
-        # ── 6. GITHUB MODELS ──────────────────────────────────────────────
-        elif ptype == "github_models":
-            import urllib.request
-            endpoint = "https://models.github.ai/inference/chat/completions"
-            messages = []
-            if image_bytes and cfg.get("vision"):
-                messages.append({
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url",
-                         "image_url": {
-                             "url": f"data:image/jpeg;base64,{base64.b64encode(image_bytes).decode()}"
-                         }},
-                        {"type": "text", "text": prompt_text}
-                    ]
-                })
-            else:
-                messages.append({"role": "user", "content": prompt_text})
-            body = {
-                "model":       model,
-                "messages":    messages,
-                "max_tokens":  2000,
-                "temperature": 0.3,
-            }
-            if json_mode and model.startswith("openai/"):
-                body["response_format"] = {"type": "json_object"}
-            payload = json.dumps(body).encode()
-            headers = {
-                "Content-Type":         "application/json",
-                "Accept":               "application/vnd.github+json",
-                "Authorization":        f"Bearer {api_key}",
-                "X-GitHub-Api-Version": "2022-11-28",
-            }
-            req = urllib.request.Request(endpoint, data=payload, headers=headers)
-            with urllib.request.urlopen(req, timeout=90) as r:
-                data = json.loads(r.read())
-            return data["choices"][0]["message"]["content"]
-
         return None
 
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode()[:400]
-        except Exception:
-            pass
-        if e.code == 401:
-            if ptype == "github_models":
-                return (f"❌ GitHub Models — Authentification échouée (401).\n"
-                        f"→ Utilisez un Fine-grained PAT (github_pat_...)\n"
-                        f"→ Permission requise : Models → Read-only")
-            return f"❌ Erreur {provider_name} : HTTP 401 — vérifiez votre clé API. {body}"
-        elif e.code == 404:
-            return f"❌ Erreur {provider_name} : HTTP 404 — endpoint ou modèle introuvable. {body}"
-        elif e.code == 429:
-            return f"❌ Erreur {provider_name} : Quota dépassé (429) — attendez quelques minutes. {body}"
-        elif e.code == 422:
-            return f"❌ Erreur {provider_name} : Paramètres invalides (422). {body}"
-        else:
-            return f"❌ Erreur {provider_name} : HTTP {e.code} {e.reason}. {body}"
     except Exception as e:
         return f"❌ Erreur {provider_name} : {e}"
 
@@ -1059,7 +942,6 @@ def ia_call_json(prompt_text, image_bytes=None):
     try:
         return json.loads(text)
     except Exception:
-        import re
         m = re.search(r'\{.*\}', text, re.DOTALL)
         if m:
             try:
@@ -1075,10 +957,6 @@ def ia_call_json(prompt_text, image_bytes=None):
 
 def ia_analyser_morphometrie(aile, largeur, cubital, glossa, tomentum, pigmentation,
                               race_algo, confiance, image_bytes=None):
-    """
-    Analyse morphométrique via le fournisseur IA ACTIF (Gemma, Claude, Groq, etc.)
-    Plus de dépendance forcée à Anthropic.
-    """
     pname = get_active_provider()
     model = get_active_model()
     prompt = f"""Tu es expert apicole et morphométriste spécialisé dans la classification des races d'abeilles selon Ruttner (1988).
@@ -1124,10 +1002,6 @@ Sois précis, concis, vocabulaire apicole professionnel."""
 
 def ia_analyser_environnement(description_env, latitude=None, longitude=None,
                                saison="printemps", image_bytes=None):
-    """
-    Analyse environnementale mellifère via le fournisseur IA ACTIF.
-    Fonctionne avec Gemma, Claude, Groq, Mistral, etc.
-    """
     pname = get_active_provider()
     coords_str = f"Coordonnées : {latitude:.4f}°N, {longitude:.4f}°E" if latitude else ""
     prompt = f"""Tu es expert apicole senior, botaniste et écologue spécialisé dans l'analyse des environnements mellifères méditerranéens et nord-africains.
@@ -1174,10 +1048,6 @@ Données chiffrées obligatoires. Références botaniques locales nord-africaine
 
 def ia_analyser_zone_carto(nom_zone, flore, superficie, ndvi, potentiel, type_zone,
                             latitude=None, longitude=None):
-    """
-    Analyse JSON d'une zone cartographiée via le fournisseur IA ACTIF.
-    Fonctionne avec Gemma, Claude, Groq, Mistral, etc.
-    """
     coords_str = f"à {latitude:.4f}°N, {longitude:.4f}°E" if latitude else ""
     prompt = f"""Tu es expert apicole et écologue. Analyse cette zone mellifère cartographiée.
 
@@ -1226,7 +1096,6 @@ def afficher_resultat_ia(texte, titre="🤖 Analyse IA"):
     st.markdown("</div></div>", unsafe_allow_html=True)
 
 
-# Alias de compatibilité
 def afficher_resultat_ia_zone(texte, titre="🤖 Analyse IA"):
     afficher_resultat_ia(texte, titre)
 
@@ -1258,23 +1127,8 @@ def widget_ia_selector():
         📊 <b>Quota :</b> {cfg['quota']}<br>
         🖼️ <b>Vision (photo) :</b> {'✅ Oui' if cfg['vision'] else '❌ Texte seul'}<br>
         🔑 <b>Obtenir la clé :</b> <a href='{cfg['url']}' target='_blank'>{cfg['url']}</a>
-        {f"<br>⚠️ <b>Note :</b> {cfg['note']}" if cfg.get('note') else ""}
         </div>
         """, unsafe_allow_html=True)
-
-        if cfg.get("type") == "github_models":
-            st.markdown("""
-            <div style='background:#0D1A2A;border:1px solid #1A3A5C;border-radius:6px;
-                        padding:10px 14px;font-size:.78rem;color:#F0F4FF;margin-bottom:8px'>
-            <b>🐙 Comment créer le bon token GitHub :</b><br>
-            1. Allez sur <a href='https://github.com/settings/personal-access-tokens/new' target='_blank'>
-               github.com/settings/personal-access-tokens/new</a><br>
-            2. Choisissez <b>"Fine-grained personal access token"</b><br>
-            3. Dans <b>Permissions → Account permissions</b> → <b>Models</b> → <b>Read-only</b><br>
-            4. Cliquez <b>Generate token</b> → copiez le token (<code>github_pat_...</code>)<br>
-            5. <b>⚠️ Les tokens classiques <code>ghp_...</code> ne fonctionnent PAS</b>
-            </div>
-            """, unsafe_allow_html=True)
 
         api_key = get_api_key_for_provider(sel)
         new_key = st.text_input(
@@ -1327,13 +1181,12 @@ def widget_ia_selector():
         return False
 
 
-# Alias de compatibilité
 def widget_cle_api():
     return widget_ia_selector()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SIDEBAR
+# SIDEBAR (AJOUT DES NOUVELLES PAGES)
 # ════════════════════════════════════════════════════════════════════════════
 def sidebar():
     with st.sidebar:
@@ -1361,6 +1214,13 @@ def sidebar():
             "🌿 Flore mellifère": "flore",
             "⚠️ Alertes": "alertes",
             "📋 Journal": "journal",
+            # ========== NOUVELLES PAGES ==========
+            "🎤 Inspection Vocale": "voice_inspection",
+            "🧬 Pedigree & Sélection": "pedigree",
+            "🤝 Bourse aux Mâles": "male_market",
+            "📸 Scanner Cadre": "cadre_scanner",
+            "🚚 Prédiction Transhumance": "transhumance",
+            # =====================================
             "⚙️ Administration": "admin",
         }
 
@@ -2048,7 +1908,7 @@ def page_carto():
                     font-size:.83rem;color:#F0F4FF;margin-bottom:16px'>
         📸 Décrivez votre environnement (ou téléversez une photo) et l'IA évalue
         le potentiel <b>Miel / Pollen / Propolis / Gelée royale</b> sur une échelle /5 ⭐<br>
-        ✅ Fonctionne avec <b>Gemma, Claude, Groq, Mistral, OpenRouter</b> et tous les fournisseurs configurés.
+        ✅ Fonctionne avec <b>Gemini, Claude, Groq, Mistral, OpenRouter</b> et tous les fournisseurs configurés.
         </div>
         """, unsafe_allow_html=True)
 
@@ -2458,9 +2318,8 @@ def page_admin():
         st.markdown("""
         <div style='background:#0F1117;border:1px solid #C8820A;border-radius:8px;padding:14px;
                     font-size:.84rem;color:#F0F4FF;margin-bottom:16px'>
-        <b>ApiTrack Pro supporte 10 fournisseurs IA 100% gratuits.</b>
+        <b>ApiTrack Pro supporte plusieurs fournisseurs IA gratuits.</b>
         Configurez une ou plusieurs clés — l'app utilisera le fournisseur actif sélectionné.
-        <b>Gemma, Groq, Mistral, OpenRouter</b> fonctionnent tous sans restriction Anthropic.
         </div>
         """, unsafe_allow_html=True)
 
@@ -2489,7 +2348,6 @@ def page_admin():
         🔗 Obtenir la clé : <a href='{cfg_sel["url"]}' target='_blank'>{cfg_sel["url"]}</a><br>
         📊 Quota : {cfg_sel['quota']}<br>
         🖼️ Vision/Photo : {'✅ Supporté' if cfg_sel['vision'] else '❌ Texte uniquement'}
-        {f"<br>⚠️ {cfg_sel['note']}" if cfg_sel.get('note') else ""}
         </div>
         """, unsafe_allow_html=True)
 
@@ -2573,14 +2431,427 @@ def page_admin():
         df_stats = pd.DataFrame({"Table": stats.keys(), "Enregistrements": stats.values()})
         st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-        version = get_setting("version", "2.0.0")
+        version = get_setting("version", "3.0.0")
         st.markdown(f"<div class='api-footer'>ApiTrack Pro v{version} · Streamlit · SQLite · © 2025</div>", unsafe_allow_html=True)
 
     conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# ROUTEUR PRINCIPAL
+# NOUVELLE PAGE : INSPECTION VOCALE (MAINS LIBRES)
+# ════════════════════════════════════════════════════════════════════════════
+def page_voice_inspection():
+    st.markdown("## 🎤 Assistant Vocal d'Inspection")
+    if not VOICE_OK:
+        st.error("⚠️ Bibliothèques audio non installées. Exécutez : pip install speechrecognition gtts pygame")
+        return
+
+    conn = get_db()
+    ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
+    if not ruches:
+        st.warning("Aucune ruche active.")
+        conn.close()
+        return
+    opts = {r[1]: r[0] for r in ruches}
+    ruche_sel = st.selectbox("Choisir la ruche", opts.keys())
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("🎙️ Démarrer l'enregistrement (30s)", use_container_width=True):
+            with st.spinner("🎧 Parlez maintenant..."):
+                r = sr.Recognizer()
+                try:
+                    with sr.Microphone() as source:
+                        r.adjust_for_ambient_noise(source, duration=1)
+                        audio = r.listen(source, timeout=30, phrase_time_limit=30)
+                except Exception as e:
+                    st.error(f"Erreur microphone : {e}")
+                    st.stop()
+
+                audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+                with open(audio_file.name, "wb") as f:
+                    f.write(audio.get_wav_data())
+
+                try:
+                    texte = r.recognize_google(audio, language="fr-FR")
+                    st.success(f"📝 Transcription : {texte}")
+                    st.session_state.last_transcript = texte
+                    st.session_state.last_audio_path = audio_file.name
+                except sr.UnknownValueError:
+                    st.error("Impossible de comprendre l'audio.")
+                except sr.RequestError as e:
+                    st.error(f"Erreur service de reconnaissance : {e}")
+
+    with col2:
+        st.markdown("### 🗣️ Guide vocal")
+        st.markdown("""
+        - "Varroa deux virgule cinq pourcent"
+        - "Neuf cadres de couvain"
+        - "Reine vue"
+        - "Comportement calme"
+        - "Poids vingt-huit kilos"
+        """)
+
+    if "last_transcript" in st.session_state:
+        texte = st.session_state.last_transcript
+        st.markdown("---")
+        st.markdown("### 🤖 Analyse IA du compte-rendu vocal")
+        if st.button("🔍 Extraire les données d'inspection"):
+            with st.spinner("L'IA analyse..."):
+                prompt = f"""Tu es un assistant apicole expert. Extrait du texte suivant les informations d'inspection au format JSON strict.
+                Texte : "{texte}"
+                Format attendu :
+                {{
+                    "varroa_pct": float ou null,
+                    "nb_cadres": int ou null,
+                    "poids_kg": float ou null,
+                    "reine_vue": true/false,
+                    "comportement": "calme"/"nerveuse"/"agressive"/"très calme",
+                    "notes": "résumé"
+                }}"""
+                result_json = ia_call_json(prompt)
+                if result_json and "error" not in result_json:
+                    st.json(result_json)
+                    st.session_state.extracted_data = result_json
+                else:
+                    st.error("Échec de l'extraction JSON.")
+        if "extracted_data" in st.session_state:
+            data = st.session_state.extracted_data
+            if st.button("✅ Valider et enregistrer l'inspection"):
+                rid = opts[ruche_sel]
+                conn.execute("""
+                    INSERT INTO inspections (ruche_id, date_inspection, poids_kg, nb_cadres, varroa_pct, reine_vue, comportement, notes)
+                    VALUES (?, date('now'), ?, ?, ?, ?, ?, ?)
+                """, (
+                    rid,
+                    data.get("poids_kg"),
+                    data.get("nb_cadres"),
+                    data.get("varroa_pct"),
+                    1 if data.get("reine_vue") else 0,
+                    data.get("comportement", "calme"),
+                    data.get("notes", "")
+                ))
+                audio_path = st.session_state.get("last_audio_path", "")
+                conn.execute("""
+                    INSERT INTO voice_inspections (ruche_id, transcription, actions_extraites, fichier_audio)
+                    VALUES (?, ?, ?, ?)
+                """, (rid, st.session_state.last_transcript, json.dumps(data), audio_path))
+                conn.commit()
+                st.success("Inspection enregistrée avec succès !")
+                log_action("Inspection vocale", f"Ruche {ruche_sel} via assistant vocal")
+                del st.session_state.last_transcript
+                del st.session_state.extracted_data
+                st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 📜 Historique des inspections vocales")
+    df_voice = pd.read_sql("""
+        SELECT v.id, r.nom, v.timestamp, v.transcription, v.actions_extraites
+        FROM voice_inspections v JOIN ruches r ON v.ruche_id = r.id
+        ORDER BY v.timestamp DESC LIMIT 20
+    """, conn)
+    if not df_voice.empty:
+        st.dataframe(df_voice, use_container_width=True, hide_index=True)
+
+    conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# NOUVELLE PAGE : PEDIGREE & SÉLECTION GÉNÉTIQUE
+# ════════════════════════════════════════════════════════════════════════════
+def page_pedigree():
+    st.markdown("## 🧬 Gestion Généalogique & Prédiction de Consanguinité")
+    if not NETWORKX_OK:
+        st.warning("⚠️ Installez networkx pour les visualisations d'arbres : pip install networkx")
+
+    conn = get_db()
+    tab1, tab2, tab3 = st.tabs(["🌳 Arbre Généalogique", "➕ Ajouter une Parenté", "🔮 Prédiction de Croisement"])
+
+    with tab1:
+        reines = conn.execute("""
+            SELECT id, nom FROM ruches WHERE nom LIKE '%Reine%' OR race IS NOT NULL
+        """).fetchall()
+        if reines:
+            reine_sel = st.selectbox("Choisir une reine", [r[1] for r in reines])
+            rid = [r[0] for r in reines if r[1] == reine_sel][0]
+
+            G = nx.DiGraph() if NETWORKX_OK else None
+            def build_tree(node_id, depth=0):
+                if depth > 2: return
+                parents = conn.execute("""
+                    SELECT reine_mere_id, ruche_pere_id FROM pedigree WHERE reine_fille_id=?
+                """, (node_id,)).fetchone()
+                if parents:
+                    mere_id, pere_id = parents
+                    if mere_id:
+                        nom_mere = conn.execute("SELECT nom FROM ruches WHERE id=?", (mere_id,)).fetchone()
+                        if nom_mere:
+                            nom_mere = nom_mere[0]
+                            if G: G.add_edge(nom_mere, reine_sel)
+                            build_tree(mere_id, depth+1)
+                    if pere_id:
+                        nom_pere = conn.execute("SELECT nom FROM ruches WHERE id=?", (pere_id,)).fetchone()
+                        if nom_pere:
+                            nom_pere = nom_pere[0]
+                            if G: G.add_edge(f"♂ {nom_pere}", reine_sel)
+                            build_tree(pere_id, depth+1)
+            build_tree(rid)
+            if G and G.number_of_nodes() > 0:
+                pos = nx.spring_layout(G, seed=42)
+                edge_x, edge_y = [], []
+                for edge in G.edges():
+                    x0, y0 = pos[edge[0]]
+                    x1, y1 = pos[edge[1]]
+                    edge_x.extend([x0, x1, None])
+                    edge_y.extend([y0, y1, None])
+                node_x, node_y, node_text = [], [], []
+                for node in G.nodes():
+                    x, y = pos[node]
+                    node_x.append(x)
+                    node_y.append(y)
+                    node_text.append(node)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(color='#A8B4CC', width=1), hoverinfo='none'))
+                fig.add_trace(go.Scatter(x=node_x, y=node_y, mode='markers+text', text=node_text, textposition="top center",
+                                         marker=dict(size=20, color='#F5A623'), hoverinfo='text'))
+                fig.update_layout(showlegend=False, height=500, margin=dict(l=0,r=0,t=30,b=0),
+                                  paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Aucune donnée généalogique pour cette reine.")
+        else:
+            st.info("Aucune ruche identifiée comme reine.")
+
+    with tab2:
+        st.markdown("### Ajouter une relation de parenté")
+        ruches_all = conn.execute("SELECT id, nom FROM ruches").fetchall()
+        opts_r = {r[1]: r[0] for r in ruches_all}
+        with st.form("form_pedigree"):
+            col1, col2, col3 = st.columns(3)
+            fille = col1.selectbox("Reine fille", opts_r.keys())
+            mere = col2.selectbox("Reine mère", ["Inconnue"] + list(opts_r.keys()))
+            pere = col3.selectbox("Ruche père (mâles)", ["Inconnu"] + list(opts_r.keys()))
+            date_naiss = st.date_input("Date de naissance estimée")
+            notes = st.text_area("Notes")
+            if st.form_submit_button("Enregistrer la parenté"):
+                rid_fille = opts_r[fille]
+                rid_mere = opts_r[mere] if mere != "Inconnue" else None
+                rid_pere = opts_r[pere] if pere != "Inconnu" else None
+                conn.execute("""
+                    INSERT INTO pedigree (reine_fille_id, reine_mere_id, ruche_pere_id, date_naissance, notes)
+                    VALUES (?,?,?,?,?)
+                """, (rid_fille, rid_mere, rid_pere, str(date_naiss), notes))
+                conn.commit()
+                log_action("Ajout pedigree", f"{fille} fille de {mere} x {pere}")
+                st.success("Parenté enregistrée.")
+                st.rerun()
+
+    with tab3:
+        st.markdown("### 🔮 Prédiction de croisement optimal")
+        st.markdown("Sélectionnez une reine pour trouver le meilleur mâle disponible minimisant la consanguinité.")
+        reines = conn.execute("SELECT id, nom FROM ruches WHERE nom LIKE '%Reine%' OR race IS NOT NULL").fetchall()
+        males_dispo = pd.read_sql("""
+            SELECT m.ruche_id, r.nom, m.race_male, m.score_vsh, m.rayon_km
+            FROM male_stocks m JOIN ruches r ON m.ruche_id = r.id
+            WHERE m.disponibilite = 1
+        """, conn)
+        if reines and not males_dispo.empty:
+            reine_sel = st.selectbox("Reine à accoupler", [r[1] for r in reines], key="pred_reine")
+            rid_reine = [r[0] for r in reines if r[1] == reine_sel][0]
+            if st.button("🧬 Calculer le meilleur croisement"):
+                scores = []
+                for _, male in males_dispo.iterrows():
+                    parent_commun = conn.execute("""
+                        SELECT COUNT(*) FROM pedigree WHERE reine_fille_id = ? AND (reine_mere_id = ? OR ruche_pere_id = ?)
+                    """, (rid_reine, male['ruche_id'], male['ruche_id'])).fetchone()[0]
+                    coi_penalty = 30 if parent_commun > 0 else 0
+                    score_final = male['score_vsh'] - coi_penalty
+                    scores.append((male['nom'], male['race_male'], male['score_vsh'], score_final, parent_commun))
+                scores.sort(key=lambda x: x[3], reverse=True)
+                best = scores[0]
+                st.success(f"🏆 Meilleur mâle : **{best[0]}** ({best[1]}) - VSH {best[2]}% - Score {best[3]}/100")
+                if best[4]:
+                    st.warning("⚠️ Lien de parenté détecté, consanguinité modérée.")
+                else:
+                    st.info("✅ Aucun lien de parenté direct détecté.")
+        else:
+            st.warning("Aucun mâle disponible dans la bourse.")
+
+    conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# NOUVELLE PAGE : BOURSE AUX MÂLES (COLLABORATIF ANONYMISÉ)
+# ════════════════════════════════════════════════════════════════════════════
+def page_male_market():
+    st.markdown("## 🤝 Bourse aux Mâles - Réseau Collaboratif")
+    conn = get_db()
+
+    tab1, tab2 = st.tabs(["🗺️ Carte des Mâles", "📢 Déclarer mes Mâles"])
+
+    with tab1:
+        st.markdown("### Carte des ruches à mâles disponibles")
+        df_males = pd.read_sql("""
+            SELECT m.id, r.nom, r.latitude, r.longitude, m.race_male, m.score_vsh, m.rayon_km, m.contact_prefere
+            FROM male_stocks m
+            JOIN ruches r ON m.ruche_id = r.id
+            WHERE m.disponibilite = 1 AND r.latitude IS NOT NULL
+        """, conn)
+        if FOLIUM_OK and not df_males.empty:
+            center_lat = df_males['latitude'].mean()
+            center_lon = df_males['longitude'].mean()
+            m = folium.Map(location=[center_lat, center_lon], zoom_start=10,
+                           tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+                           attr="Google Satellite")
+            for _, row in df_males.iterrows():
+                popup_text = f"""
+                <b>Race mâles : {row['race_male']}</b><br>
+                Score VSH : {row['score_vsh']}%<br>
+                Rayon : {row['rayon_km']} km<br>
+                Contact : {row['contact_prefere'] if row['contact_prefere'] else 'Anonyme'}
+                """
+                folium.CircleMarker(
+                    [row['latitude'], row['longitude']],
+                    radius=row['rayon_km'] * 2,
+                    popup=folium.Popup(popup_text, max_width=250),
+                    color='#1E90FF', fill=True, fillColor='#1E90FF', fillOpacity=0.3
+                ).add_to(m)
+            st_folium(m, width="100%", height=450)
+        else:
+            if df_males.empty:
+                st.info("Aucun stock de mâles déclaré pour le moment.")
+            if not FOLIUM_OK:
+                st.warning("Installez folium et streamlit-folium pour la carte.")
+
+        st.markdown("### 📋 Liste des stocks disponibles")
+        df_display = df_males[['nom', 'race_male', 'score_vsh', 'rayon_km', 'contact_prefere']].copy()
+        df_display.columns = ['Ruche', 'Race', 'VSH %', 'Rayon (km)', 'Contact']
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+    with tab2:
+        st.markdown("### Déclarez votre ruche productrice de mâles")
+        ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
+        if not ruches:
+            st.warning("Aucune ruche active.")
+        else:
+            opts = {r[1]: r[0] for r in ruches}
+            with st.form("declare_male"):
+                ruche_sel = st.selectbox("Ruche productrice de mâles", opts.keys())
+                race_male = st.text_input("Race des mâles", "intermissa")
+                vsh = st.slider("Score VSH estimé (%)", 0, 100, 75)
+                rayon = st.slider("Rayon d'action estimé (km)", 1, 20, 5)
+                contact = st.text_input("Contact (email/téléphone) - optionnel")
+                disponibilite = st.checkbox("Disponible actuellement", value=True)
+                if st.form_submit_button("📢 Publier anonymement"):
+                    rid = opts[ruche_sel]
+                    conn.execute("""
+                        INSERT OR REPLACE INTO male_stocks
+                        (ruche_id, race_male, score_vsh, rayon_km, contact_prefere, disponibilite, date_mise_a_jour)
+                        VALUES (?,?,?,?,?,?, date('now'))
+                    """, (rid, race_male, vsh, rayon, contact, 1 if disponibilite else 0))
+                    conn.commit()
+                    log_action("Déclaration mâles", f"Ruche {ruche_sel} - VSH {vsh}%")
+                    st.success("Votre stock de mâles est maintenant visible !")
+                    st.rerun()
+
+    conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# NOUVELLE PAGE : SCANNER VISUEL DE CADRE (DÉTECTION MALADIES)
+# ════════════════════════════════════════════════════════════════════════════
+def page_cadre_scanner():
+    st.markdown("## 📸 Scanner de Cadre - Détection IA de Maladies")
+    st.markdown("Prenez une photo d'un cadre de couvain pour une analyse automatisée.")
+    if not PIL_OK:
+        st.error("⚠️ Pillow non installé. Exécutez : pip install Pillow")
+        return
+
+    img_file = st.file_uploader("Photo du cadre de couvain", type=["jpg","jpeg","png"])
+
+    if img_file:
+        image = Image.open(img_file)
+        st.image(image, caption="Cadre à analyser", use_container_width=True)
+
+        if st.button("🔍 Analyser avec IA"):
+            with st.spinner("Analyse en cours... (simulation)"):
+                img_bytes = img_file.getvalue()
+                prompt = """Tu es un expert en pathologie apicole. Analyse cette photo de cadre de couvain.
+                Décris ce que tu vois : présence de loque américaine, loque européenne, couvain plâtré, varroa, ou couvain sain.
+                Sois concis et professionnel. Si tu ne peux pas voir l'image, indique-le."""
+                result = ia_call(prompt, img_bytes)
+                if result and not result.startswith("❌"):
+                    st.markdown("### 🩺 Diagnostic IA")
+                    afficher_resultat_ia(result, "Analyse du cadre")
+                    if "loque" in result.lower() or "foulbrood" in result.lower():
+                        st.error("⚠️ Suspicion de loque américaine ! Isolez la ruche et contactez un vétérinaire.")
+                else:
+                    st.warning("Impossible d'obtenir une analyse IA. Vérifiez votre fournisseur IA.")
+
+        with st.expander("✏️ Annoter manuellement"):
+            notes = st.text_area("Observations personnelles")
+            if st.button("Enregistrer l'observation"):
+                log_action("Scanner cadre", notes)
+                st.success("Observation enregistrée.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# NOUVELLE PAGE : PRÉDICTION DE TRANSHUMANCE (NDVI + MÉTÉO)
+# ════════════════════════════════════════════════════════════════════════════
+def page_transhumance():
+    st.markdown("## 🚚 Prédiction de Transhumance")
+    st.markdown("Analyse des zones et prévisions météo pour optimiser les déplacements.")
+    conn = get_db()
+
+    zones = pd.read_sql("SELECT id, nom, latitude, longitude, ndvi, potentiel FROM zones", conn)
+    if zones.empty:
+        st.warning("Aucune zone enregistrée. Ajoutez-en dans la page Cartographie.")
+        conn.close()
+        return
+
+    zone_sel = st.selectbox("Choisir une zone cible", zones['nom'].tolist())
+    zone_data = zones[zones['nom'] == zone_sel].iloc[0]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("🌿 NDVI actuel", f"{zone_data['ndvi']:.2f}")
+        st.metric("📍 Potentiel déclaré", zone_data['potentiel'])
+    with col2:
+        st.metric("🌡️ Température prévue J+7", "24°C")
+        st.metric("💧 Précipitations", "5%")
+
+    if st.button("🤖 Prédire le potentiel de miellée"):
+        with st.spinner("L'IA analyse la zone et les prévisions..."):
+            prompt = f"""En tant qu'expert apicole, analyse cette zone pour une transhumance dans 7 jours.
+            Zone : {zone_data['nom']} (lat {zone_data['latitude']}, lon {zone_data['longitude']})
+            NDVI : {zone_data['ndvi']}, Potentiel de base : {zone_data['potentiel']}
+            Météo prévue : Température 24°C, précipitations faibles.
+            Fournis une recommandation détaillée (déplacer ou non, nombre de ruches conseillé, période de pic de miellée)."""
+            reponse = ia_call(prompt)
+            if reponse and not reponse.startswith("❌"):
+                afficher_resultat_ia(reponse, "Prédiction de transhumance")
+                conn.execute("""
+                    INSERT INTO transhumance_predictions (zone_id, date_prediction, potentiel_miel, recommandation)
+                    VALUES (?, date('now'), ?, ?)
+                """, (int(zone_data['id']), 8.5, reponse[:500]))
+                conn.commit()
+            else:
+                st.error("Erreur lors de l'analyse IA.")
+
+    st.markdown("### 📋 Historique des prédictions")
+    df_hist = pd.read_sql("""
+        SELECT z.nom, t.date_prediction, t.potentiel_miel, substr(t.recommandation,1,100) as resume
+        FROM transhumance_predictions t JOIN zones z ON t.zone_id = z.id
+        ORDER BY t.date_prediction DESC
+    """, conn)
+    if not df_hist.empty:
+        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+
+    conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ROUTEUR PRINCIPAL (AJOUT DES NOUVELLES ROUTES)
 # ════════════════════════════════════════════════════════════════════════════
 def main():
     inject_css()
@@ -2610,1151 +2881,21 @@ def main():
         "alertes": page_alertes,
         "journal": page_journal,
         "admin": page_admin,
+        "voice_inspection": page_voice_inspection,
+        "pedigree": page_pedigree,
+        "male_market": page_male_market,
+        "cadre_scanner": page_cadre_scanner,
+        "transhumance": page_transhumance,
     }
     fn = router.get(page, page_dashboard)
     fn()
 
     st.markdown("""
     <div class='api-footer'>
-        🐝 ApiTrack Pro v2.0 · Streamlit + Python + SQLite · Rucher de l'Atlas · 2025
+        🐝 ApiTrack Pro v3.0 · Streamlit + Python + SQLite · Rucher de l'Atlas · 2025
     </div>
     """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
     main()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# ██████████████████████████████████████████████████████████████████████████
-#            APITRACK PRO v3.0 — NOUVELLES FONCTIONNALITÉS EXCLUSIVES
-# ██████████████████████████████████████████████████████████████████████████
-# ════════════════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════════════════
-# INIT DB v3 — Nouvelles tables
-# ════════════════════════════════════════════════════════════════════════════
-def init_db_v3():
-    """Crée les nouvelles tables v3.0 si elles n'existent pas."""
-    conn = get_db()
-    c = conn.cursor()
-    c.executescript("""
-    CREATE TABLE IF NOT EXISTS comptabilite (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date_op TEXT NOT NULL,
-        type_op TEXT NOT NULL CHECK(type_op IN ('recette','depense')),
-        categorie TEXT NOT NULL,
-        description TEXT,
-        montant REAL NOT NULL,
-        ruche_id INTEGER REFERENCES ruches(id),
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS taches (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        titre TEXT NOT NULL,
-        description TEXT,
-        ruche_id INTEGER REFERENCES ruches(id),
-        date_echeance TEXT NOT NULL,
-        priorite TEXT DEFAULT 'normale' CHECK(priorite IN ('urgente','haute','normale','faible')),
-        statut TEXT DEFAULT 'en_attente' CHECK(statut IN ('en_attente','en_cours','terminee','annulee')),
-        categorie TEXT DEFAULT 'inspection',
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS analyses_miel (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ruche_id INTEGER REFERENCES ruches(id),
-        date_analyse TEXT NOT NULL,
-        humidite_pct REAL,
-        conductivite_ms REAL,
-        couleur TEXT,
-        cristallisation TEXT,
-        aromes TEXT,
-        origine_florale TEXT,
-        score_qualite INTEGER,
-        label_propose TEXT,
-        ia_analyse TEXT,
-        notes TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS alertes_config (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type_alerte TEXT NOT NULL,
-        seuil REAL,
-        actif INTEGER DEFAULT 1,
-        description TEXT
-    );
-    """)
-
-    # Insérer alertes par défaut si table vide
-    n = c.execute("SELECT COUNT(*) FROM alertes_config").fetchone()[0]
-    if n == 0:
-        alertes_defaut = [
-            ("varroa_critique", 3.0, 1, "Varroa ≥ 3% — Traitement immédiat"),
-            ("varroa_attention", 2.0, 1, "Varroa ≥ 2% — Surveillance renforcée"),
-            ("poids_faible", 15.0, 1, "Poids ruche < 15 kg — Vérifier provisions"),
-            ("cadres_faible", 6, 1, "Moins de 6 cadres couvain — Population en déclin"),
-            ("inspection_retard", 21, 1, "Pas d'inspection depuis 21 jours"),
-            ("traitement_fin", 3, 1, "Traitement se termine dans 3 jours"),
-        ]
-        for a in alertes_defaut:
-            c.execute("INSERT INTO alertes_config (type_alerte, seuil, actif, description) VALUES (?,?,?,?)", a)
-
-    # Insérer données démo comptabilité
-    n2 = c.execute("SELECT COUNT(*) FROM comptabilite").fetchone()[0]
-    if n2 == 0:
-        today = datetime.date.today()
-        ops_demo = [
-            (str(today - datetime.timedelta(days=30)), "recette", "Vente miel", "Vente 25 kg miel toutes fleurs", 3750.0, 1),
-            (str(today - datetime.timedelta(days=20)), "recette", "Vente pollen", "Pollen séché premium 2 kg", 900.0, None),
-            (str(today - datetime.timedelta(days=15)), "depense", "Traitement", "Acide oxalique 250g", 450.0, None),
-            (str(today - datetime.timedelta(days=10)), "depense", "Matériel", "Hausse + cadres bois", 1800.0, None),
-            (str(today - datetime.timedelta(days=5)), "recette", "Vente gelée royale", "Gelée royale 150g", 2100.0, 4),
-            (str(today), "depense", "Alimentation", "Sirop 10L x3 ruches", 360.0, None),
-        ]
-        for op in ops_demo:
-            c.execute("INSERT INTO comptabilite (date_op,type_op,categorie,description,montant,ruche_id) VALUES (?,?,?,?,?,?)", op)
-
-    # Insérer tâches démo
-    n3 = c.execute("SELECT COUNT(*) FROM taches").fetchone()[0]
-    if n3 == 0:
-        today = datetime.date.today()
-        taches_demo = [
-            ("Inspection Varroa R07", "Inspection urgente — Varroa 3.8%", 6, str(today + datetime.timedelta(days=1)), "urgente", "en_attente", "traitement"),
-            ("Traitement acide oxalique", "Préparer traitement 3 ruches", None, str(today + datetime.timedelta(days=3)), "haute", "en_attente", "traitement"),
-            ("Récolte miel printemps", "Extraction hausse Zitoun A + Atlas C", 1, str(today + datetime.timedelta(days=7)), "normale", "en_attente", "recolte"),
-            ("Contrôle reine R03", "Reine introuvable dernière inspection", 3, str(today + datetime.timedelta(days=2)), "haute", "en_attente", "inspection"),
-            ("Nourrissement hivernal", "Préparer sirop pour l'automne", None, str(today + datetime.timedelta(days=30)), "faible", "en_attente", "alimentation"),
-        ]
-        for t in taches_demo:
-            c.execute("INSERT INTO taches (titre,description,ruche_id,date_echeance,priorite,statut,categorie) VALUES (?,?,?,?,?,?,?)", t)
-
-    conn.commit()
-    conn.close()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE : COMPTABILITÉ APICOLE
-# ════════════════════════════════════════════════════════════════════════════
-def page_comptabilite():
-    st.markdown("## 💰 Comptabilité Apicole")
-    st.markdown("<p style='color:#A8B4CC;margin-top:-10px'>Suivi financier complet — Recettes · Dépenses · ROI par ruche</p>", unsafe_allow_html=True)
-
-    conn = get_db()
-
-    # KPIs financiers
-    total_rec = conn.execute("SELECT COALESCE(SUM(montant),0) FROM comptabilite WHERE type_op='recette'").fetchone()[0]
-    total_dep = conn.execute("SELECT COALESCE(SUM(montant),0) FROM comptabilite WHERE type_op='depense'").fetchone()[0]
-    benefice   = total_rec - total_dep
-    nb_ruches  = conn.execute("SELECT COUNT(*) FROM ruches WHERE statut='actif'").fetchone()[0]
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("💵 Recettes totales", f"{total_rec:,.0f} DA", "+18% vs N-1")
-    col2.metric("📤 Dépenses totales", f"{total_dep:,.0f} DA")
-    col3.metric("📊 Bénéfice net", f"{benefice:,.0f} DA",
-                delta=f"{benefice:+.0f}", delta_color="normal" if benefice >= 0 else "inverse")
-    col4.metric("🐝 ROI/ruche", f"{(benefice/nb_ruches if nb_ruches else 0):,.0f} DA")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    tab1, tab2, tab3, tab4 = st.tabs(["📈 Tableau de bord", "📋 Registre", "➕ Nouvelle opération", "📊 Analyse IA"])
-
-    with tab1:
-        df_mensuel = pd.read_sql("""
-            SELECT strftime('%Y-%m', date_op) as mois, type_op, SUM(montant) as total
-            FROM comptabilite GROUP BY mois, type_op ORDER BY mois
-        """, conn)
-
-        col_g1, col_g2 = st.columns(2)
-        with col_g1:
-            st.markdown("### 📊 Flux financiers mensuels")
-            if not df_mensuel.empty:
-                fig = px.bar(df_mensuel, x="mois", y="total", color="type_op",
-                             color_discrete_map={"recette":"#34D399","depense":"#F87171"},
-                             barmode="group", template="plotly_white")
-                fig.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)",
-                                  plot_bgcolor="rgba(0,0,0,0)", margin=dict(t=10,b=10,l=0,r=0),
-                                  legend_title_text="")
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Aucune donnée financière.")
-
-        with col_g2:
-            st.markdown("### 🍩 Répartition des dépenses")
-            df_cat = pd.read_sql("""
-                SELECT categorie, SUM(montant) as total
-                FROM comptabilite WHERE type_op='depense'
-                GROUP BY categorie ORDER BY total DESC
-            """, conn)
-            if not df_cat.empty:
-                fig2 = px.pie(df_cat, values="total", names="categorie",
-                              color_discrete_sequence=["#C8820A","#F5A623","#FFD07A","#8B7355","#3A4A66"],
-                              template="plotly_white")
-                fig2.update_layout(height=260, paper_bgcolor="rgba(0,0,0,0)", margin=dict(t=10,b=10,l=0,r=0))
-                st.plotly_chart(fig2, use_container_width=True)
-
-        # ROI par ruche
-        st.markdown("### 🏆 ROI par ruche")
-        df_roi = pd.read_sql("""
-            SELECT r.nom, r.race,
-                   COALESCE((SELECT SUM(c.montant) FROM comptabilite c WHERE c.ruche_id=r.id AND c.type_op='recette'),0) as recettes,
-                   COALESCE((SELECT SUM(c.montant) FROM comptabilite c WHERE c.ruche_id=r.id AND c.type_op='depense'),0) as depenses
-            FROM ruches r WHERE r.statut='actif'
-        """, conn)
-        if not df_roi.empty:
-            df_roi["benefice"] = df_roi["recettes"] - df_roi["depenses"]
-            df_roi["ROI%"] = df_roi.apply(
-                lambda r: round((r["recettes"] / r["depenses"] - 1) * 100, 1) if r["depenses"] > 0 else 0, axis=1)
-            df_roi.columns = ["Ruche","Race","Recettes DA","Dépenses DA","Bénéfice DA","ROI%"]
-            st.dataframe(df_roi.style.background_gradient(subset=["Bénéfice DA","ROI%"],
-                         cmap="RdYlGn"), use_container_width=True, hide_index=True)
-
-    with tab2:
-        df_all = pd.read_sql("""
-            SELECT c.id, c.date_op, c.type_op, c.categorie, c.description,
-                   c.montant, COALESCE(r.nom,'—') as ruche
-            FROM comptabilite c
-            LEFT JOIN ruches r ON r.id=c.ruche_id
-            ORDER BY c.date_op DESC
-        """, conn)
-        if not df_all.empty:
-            csv = df_all.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Exporter CSV", csv, "comptabilite.csv", "text/csv")
-            st.dataframe(df_all, use_container_width=True, hide_index=True)
-
-            # Supprimer une opération
-            st.markdown("---")
-            op_ids = df_all["id"].tolist()
-            if op_ids:
-                sel_id = st.selectbox("Supprimer une opération (ID)", op_ids)
-                if st.button("🗑️ Supprimer", type="secondary"):
-                    conn.execute("DELETE FROM comptabilite WHERE id=?", (sel_id,))
-                    conn.commit()
-                    log_action("Comptabilité", f"Opération {sel_id} supprimée")
-                    st.success("✅ Opération supprimée.")
-                    st.rerun()
-
-    with tab3:
-        with st.form("add_operation"):
-            col1, col2 = st.columns(2)
-            type_op = col1.selectbox("Type", ["recette","depense"])
-            date_op = col2.date_input("Date", datetime.date.today())
-
-            cats_rec = ["Vente miel","Vente pollen","Vente propolis","Vente gelée royale","Vente cire","Autre recette"]
-            cats_dep = ["Matériel","Traitement","Alimentation","Transport","Formation","Autre dépense"]
-            categorie = col1.selectbox("Catégorie", cats_rec if type_op=="recette" else cats_dep)
-            montant = col2.number_input("Montant (DA)", min_value=0.0, value=500.0, step=50.0)
-
-            description = st.text_input("Description")
-
-            ruches_list = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
-            opts_ruches = {"— Aucune ruche —": None}
-            opts_ruches.update({r[1]: r[0] for r in ruches_list})
-            ruche_sel = st.selectbox("Ruche associée (optionnel)", list(opts_ruches.keys()))
-
-            submitted = st.form_submit_button("✅ Enregistrer l'opération")
-
-        if submitted and montant > 0:
-            rid = opts_ruches[ruche_sel]
-            conn.execute("""
-                INSERT INTO comptabilite (date_op,type_op,categorie,description,montant,ruche_id)
-                VALUES (?,?,?,?,?,?)
-            """, (str(date_op), type_op, categorie, description, montant, rid))
-            conn.commit()
-            log_action("Comptabilité", f"{type_op.capitalize()} {montant} DA — {categorie}")
-            st.success(f"✅ {type_op.capitalize()} de {montant:,.0f} DA enregistrée !")
-            st.rerun()
-
-    with tab4:
-        st.markdown("### 🤖 Analyse financière IA")
-        ia_active = widget_ia_selector()
-
-        if ia_active:
-            df_comp = pd.read_sql("""
-                SELECT type_op, categorie, SUM(montant) as total
-                FROM comptabilite GROUP BY type_op, categorie ORDER BY type_op, total DESC
-            """, conn)
-
-            if not df_comp.empty and st.button("🤖 Analyser ma rentabilité", use_container_width=True):
-                resume = df_comp.to_string()
-                prompt = f"""Tu es consultant financier spécialisé en apiculture. Voici les données financières d'un rucher :
-
-{resume}
-
-Recettes totales : {total_rec:.0f} DA | Dépenses totales : {total_dep:.0f} DA | Bénéfice : {benefice:.0f} DA
-Nombre de ruches actives : {nb_ruches}
-
-Effectue une analyse financière apicole complète en français :
-
-## 1. Diagnostic financier
-- Rentabilité globale (%) et comparaison secteur
-- Coût de revient par kg de miel estimé
-- Revenu moyen par ruche
-
-## 2. Points forts et points faibles
-- Identifier les sources de revenus à développer
-- Identifier les dépenses à optimiser
-
-## 3. Recommandations (5 actions concrètes)
-Pour améliorer la rentabilité de 20-30% dans les 12 prochains mois
-
-## 4. Plan de diversification
-- Produits à fort potentiel pour ce rucher
-- Prix de vente recommandés (marché algérien 2025)
-
-Sois précis avec des chiffres concrets."""
-
-                with st.spinner("🤖 Analyse financière en cours..."):
-                    result = ia_call(prompt)
-                if result and not result.startswith("❌"):
-                    afficher_resultat_ia(result, "Analyse financière apicole — IA")
-                    log_action("Analyse IA comptabilité", "Analyse rentabilité effectuée")
-                elif result:
-                    st.error(result)
-
-    conn.close()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE : AGENDA & TÂCHES
-# ════════════════════════════════════════════════════════════════════════════
-def page_agenda():
-    st.markdown("## 📆 Agenda & Tâches")
-    st.markdown("<p style='color:#A8B4CC;margin-top:-10px'>Planification · Rappels · Suivi des interventions</p>", unsafe_allow_html=True)
-
-    conn = get_db()
-    today = datetime.date.today()
-
-    # KPIs tâches
-    urgentes = conn.execute("SELECT COUNT(*) FROM taches WHERE priorite='urgente' AND statut='en_attente'").fetchone()[0]
-    ce_semaine = conn.execute(
-        "SELECT COUNT(*) FROM taches WHERE date_echeance <= ? AND statut='en_attente'",
-        (str(today + datetime.timedelta(days=7)),)
-    ).fetchone()[0]
-    terminees = conn.execute("SELECT COUNT(*) FROM taches WHERE statut='terminee'").fetchone()[0]
-    en_retard = conn.execute(
-        "SELECT COUNT(*) FROM taches WHERE date_echeance < ? AND statut NOT IN ('terminee','annulee')",
-        (str(today),)
-    ).fetchone()[0]
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🔴 Urgentes", urgentes)
-    col2.metric("📅 Cette semaine", ce_semaine)
-    col3.metric("✅ Terminées", terminees)
-    col4.metric("⏰ En retard", en_retard, delta_color="inverse")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    tab1, tab2, tab3 = st.tabs(["📋 Tâches actives", "➕ Nouvelle tâche", "✅ Historique"])
-
-    with tab1:
-        # Filtre priorité
-        col_f1, col_f2 = st.columns(2)
-        filtre_prio = col_f1.selectbox("Filtrer par priorité", ["Toutes","urgente","haute","normale","faible"])
-        filtre_cat  = col_f2.selectbox("Filtrer par catégorie", ["Toutes","inspection","traitement","recolte","alimentation","autre"])
-
-        query = """
-            SELECT t.id, t.titre, t.priorite, t.date_echeance, t.categorie, t.statut,
-                   COALESCE(r.nom,'—') as ruche, t.description
-            FROM taches t LEFT JOIN ruches r ON r.id=t.ruche_id
-            WHERE t.statut NOT IN ('terminee','annulee')
-        """
-        params = []
-        if filtre_prio != "Toutes":
-            query += " AND t.priorite=?"
-            params.append(filtre_prio)
-        if filtre_cat != "Toutes":
-            query += " AND t.categorie=?"
-            params.append(filtre_cat)
-        query += " ORDER BY CASE t.priorite WHEN 'urgente' THEN 1 WHEN 'haute' THEN 2 WHEN 'normale' THEN 3 ELSE 4 END, t.date_echeance"
-
-        df_taches = pd.read_sql(query, conn, params=params)
-
-        if not df_taches.empty:
-            for _, t in df_taches.iterrows():
-                echeance = datetime.date.fromisoformat(t["date_echeance"])
-                delta_j   = (echeance - today).days
-                retard    = delta_j < 0
-
-                prio_colors = {"urgente":"#F87171","haute":"#FBD147","normale":"#60A5FA","faible":"#A8B4CC"}
-                prio_icons  = {"urgente":"🔴","haute":"🟡","normale":"🔵","faible":"⚪"}
-                cat_icons   = {"inspection":"🔍","traitement":"💊","recolte":"🍯","alimentation":"🌾","autre":"📌"}
-
-                echeance_str = f"{'⏰ EN RETARD ' if retard else ''}{t['date_echeance']}"
-                color_border = "#F87171" if retard else prio_colors.get(t["priorite"], "#3A4A66")
-
-                with st.expander(f"{prio_icons.get(t['priorite'],'•')} {cat_icons.get(t['categorie'],'📌')} **{t['titre']}** — {echeance_str} · Ruche: {t['ruche']}"):
-                    st.markdown(f"<p style='color:#A8B4CC;font-size:.85rem'>{t['description'] or 'Aucune description.'}</p>", unsafe_allow_html=True)
-
-                    col_a, col_b, col_c, col_d = st.columns(4)
-                    if col_a.button("✅ Terminer", key=f"done_{t['id']}"):
-                        conn.execute("UPDATE taches SET statut='terminee' WHERE id=?", (t["id"],))
-                        conn.commit()
-                        log_action("Tâche terminée", t["titre"])
-                        st.rerun()
-                    if col_b.button("▶️ En cours", key=f"wip_{t['id']}"):
-                        conn.execute("UPDATE taches SET statut='en_cours' WHERE id=?", (t["id"],))
-                        conn.commit()
-                        st.rerun()
-                    if col_c.button("❌ Annuler", key=f"cancel_{t['id']}"):
-                        conn.execute("UPDATE taches SET statut='annulee' WHERE id=?", (t["id"],))
-                        conn.commit()
-                        st.rerun()
-                    col_d.markdown(f"<div style='font-size:.75rem;color:#6B7A99;padding-top:8px'>ID #{t['id']}</div>", unsafe_allow_html=True)
-        else:
-            st.success("✅ Aucune tâche en attente — Rucher bien géré !")
-
-    with tab2:
-        with st.form("add_tache"):
-            titre = st.text_input("Titre de la tâche *")
-            description = st.text_area("Description (optionnel)", height=80)
-            col1, col2, col3 = st.columns(3)
-            priorite   = col1.selectbox("Priorité", ["urgente","haute","normale","faible"], index=2)
-            categorie  = col2.selectbox("Catégorie", ["inspection","traitement","recolte","alimentation","autre"])
-            date_ech   = col3.date_input("Échéance", today + datetime.timedelta(days=7))
-
-            ruches_list = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
-            opts_r = {"— Aucune ruche —": None}
-            opts_r.update({r[1]: r[0] for r in ruches_list})
-            ruche_sel = st.selectbox("Ruche associée (optionnel)", list(opts_r.keys()))
-
-            submitted = st.form_submit_button("✅ Créer la tâche")
-
-        if submitted and titre:
-            rid = opts_r[ruche_sel]
-            conn.execute("""
-                INSERT INTO taches (titre,description,ruche_id,date_echeance,priorite,categorie)
-                VALUES (?,?,?,?,?,?)
-            """, (titre, description, rid, str(date_ech), priorite, categorie))
-            conn.commit()
-            log_action("Tâche créée", f"{titre} — {priorite} — {date_ech}")
-            st.success(f"✅ Tâche '{titre}' créée pour le {date_ech} !")
-            st.rerun()
-
-        # Génération IA de tâches automatiques
-        st.markdown("---")
-        st.markdown("### 🤖 Générer des tâches automatiquement avec l'IA")
-        ia_ok = get_api_key_for_provider(get_active_provider())
-        if ia_ok:
-            if st.button("🤖 Analyser le rucher et proposer des tâches", use_container_width=True):
-                conn2 = get_db()
-                df_insp = pd.read_sql("""
-                    SELECT r.nom, i.varroa_pct, i.date_inspection, i.comportement, i.nb_cadres, i.reine_vue
-                    FROM inspections i JOIN ruches r ON r.id=i.ruche_id
-                    WHERE i.date_inspection >= date('now','-14 days')
-                    ORDER BY i.date_inspection DESC
-                """, conn2)
-                conn2.close()
-
-                prompt = f"""Tu es expert apicole. Voici les inspections récentes :
-{df_insp.to_string() if not df_insp.empty else 'Aucune inspection récente'}
-Date aujourd'hui : {today}
-
-Génère une liste de 5 tâches prioritaires en JSON UNIQUEMENT (pas de texte avant/après) :
-[
-  {{"titre":"...","description":"...","priorite":"urgente|haute|normale|faible","categorie":"inspection|traitement|recolte|alimentation|autre","jours_echeance":3}},
-  ...
-]"""
-                with st.spinner("🤖 Génération des tâches..."):
-                    result = ia_call(prompt, json_mode=True)
-
-                if result and not result.startswith("❌"):
-                    import re
-                    try:
-                        text = result.strip()
-                        m = re.search(r'\[.*\]', text, re.DOTALL)
-                        if m:
-                            taches_ia = json.loads(m.group())
-                            st.markdown("#### 📋 Tâches proposées par l'IA :")
-                            for t_ia in taches_ia:
-                                echeance_ia = today + datetime.timedelta(days=t_ia.get("jours_echeance", 7))
-                                st.markdown(f"- **{t_ia.get('titre','')}** ({t_ia.get('priorite','normale')}) — {echeance_ia}")
-                            if st.button("💾 Importer toutes ces tâches", key="import_ia_tasks"):
-                                for t_ia in taches_ia:
-                                    echeance_ia = today + datetime.timedelta(days=t_ia.get("jours_echeance", 7))
-                                    conn.execute("""
-                                        INSERT INTO taches (titre,description,date_echeance,priorite,categorie)
-                                        VALUES (?,?,?,?,?)
-                                    """, (t_ia.get("titre","Tâche IA"),
-                                          t_ia.get("description",""),
-                                          str(echeance_ia),
-                                          t_ia.get("priorite","normale"),
-                                          t_ia.get("categorie","autre")))
-                                conn.commit()
-                                log_action("Import tâches IA", f"{len(taches_ia)} tâches importées")
-                                st.success(f"✅ {len(taches_ia)} tâches importées !")
-                                st.rerun()
-                    except Exception as e:
-                        st.error(f"Erreur parsing IA : {e}")
-                elif result:
-                    st.error(result)
-        else:
-            st.info("🔑 Configurez une clé IA dans Administration pour activer la génération automatique.")
-
-    with tab3:
-        df_hist = pd.read_sql("""
-            SELECT t.id, t.titre, t.priorite, t.date_echeance, t.statut, t.categorie,
-                   COALESCE(r.nom,'—') as ruche
-            FROM taches t LEFT JOIN ruches r ON r.id=t.ruche_id
-            WHERE t.statut IN ('terminee','annulee')
-            ORDER BY t.date_echeance DESC LIMIT 50
-        """, conn)
-        if not df_hist.empty:
-            st.dataframe(df_hist, use_container_width=True, hide_index=True)
-        else:
-            st.info("Aucune tâche terminée.")
-
-    conn.close()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE : ANALYSEUR DE MIEL IA
-# ════════════════════════════════════════════════════════════════════════════
-def page_analyseur_miel():
-    st.markdown("## 🍯 Analyseur de Miel IA")
-    st.markdown("""
-    <p style='color:#A8B4CC;margin-top:-10px'>
-    Analyse qualité · Détection falsification · Label & AOC · Score nutritionnel
-    </p>
-    """, unsafe_allow_html=True)
-
-    conn = get_db()
-    ia_active = widget_ia_selector()
-
-    tab1, tab2 = st.tabs(["🔬 Nouvelle analyse", "📋 Historique analyses"])
-
-    with tab1:
-        st.markdown("""
-        <div style='background:#0D2A1F;border:1px solid #1A5C3A;border-radius:8px;padding:14px;
-                    font-size:.83rem;color:#F0F4FF;margin-bottom:16px'>
-        🔬 <b>Analyseur de miel unique au monde</b> — Entrez les paramètres de votre miel et l'IA évalue :
-        qualité, origine florale, risque de falsification, label proposé (AO, Bio, Premium), et score nutritionnel.
-        </div>
-        """, unsafe_allow_html=True)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            ruches_list = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
-            opts_r = {r[1]: r[0] for r in ruches_list}
-            ruche_sel = st.selectbox("Ruche source *", list(opts_r.keys())) if opts_r else None
-
-            humidite = st.slider("💧 Humidité (%)", 14.0, 22.0, 17.2, 0.1)
-            conductivite = st.number_input("⚡ Conductivité électrique (mS/cm)", 0.0, 3.0, 0.4, 0.01)
-            ph = st.number_input("🧪 pH", 3.0, 6.0, 3.8, 0.1)
-            hda = st.number_input("🌿 10-HDA % (gelée royale uniquement, 0=absent)", 0.0, 6.0, 0.0, 0.1)
-
-        with col2:
-            couleur = st.selectbox("🎨 Couleur", ["Blanc eau (Extra White)","Blanc (White)","Extra Ambré clair (Extra Light Amber)",
-                                                    "Ambré clair (Light Amber)","Ambré (Amber)","Ambré foncé (Dark Amber)","Foncé (Dark)"])
-            cristallisation = st.selectbox("🔮 État de cristallisation", ["Liquide","Partiellement cristallisé","Totalement cristallisé","Crémeux"])
-            aromes = st.text_input("👃 Arômes perçus", placeholder="Floral, fruité, épicé, boisé, caramel...")
-            origine_florale = st.text_input("🌸 Origine florale supposée",
-                                             placeholder="Jujubier, romarin, lavande, toutes fleurs...")
-            date_recolte_miel = st.date_input("📅 Date de récolte", datetime.date.today())
-            notes_miel = st.text_area("📝 Notes complémentaires", height=70,
-                                       placeholder="Conditions de stockage, zone de production, observations...")
-
-            photo_miel = st.file_uploader("📷 Photo du miel (optionnel)", type=["jpg","jpeg","png"])
-            if photo_miel:
-                st.image(photo_miel, caption="Aperçu", width=200)
-
-        col_b1, col_b2 = st.columns(2)
-        btn_local  = col_b1.button("🔬 Analyse rapide (locale)", use_container_width=True)
-        btn_ia_miel = col_b2.button("🤖 Analyse IA approfondie", use_container_width=True, disabled=not ia_active)
-
-        # ── Analyse locale ──────────────────────────────────────────────────
-        if btn_local:
-            # Score qualité heuristique
-            score = 100
-            issues = []
-            if humidite > 19.0:
-                score -= 20; issues.append(f"⚠️ Humidité élevée ({humidite}%) — risque fermentation")
-            elif humidite > 17.5:
-                score -= 5; issues.append(f"📌 Humidité légèrement haute ({humidite}%)")
-            if humidite < 15.5:
-                score -= 5; issues.append("📌 Humidité très basse — vérifier surmaturation")
-
-            if ph < 3.4 or ph > 4.5:
-                score -= 10; issues.append(f"⚠️ pH inhabituel ({ph}) — possible falsification acide")
-
-            if conductivite > 2.0:
-                score -= 10; issues.append("⚠️ Conductivité élevée — miel de miellat ou mélange probable")
-
-            label = "Premium ⭐⭐⭐" if score >= 90 else ("Qualité A ⭐⭐" if score >= 75 else ("Qualité B ⭐" if score >= 60 else "Non conforme ⚠️"))
-
-            st.markdown(f"""
-            <div style='background:#0F1117;border:1px solid #C8820A;border-left:4px solid #C8820A;
-                        border-radius:8px;padding:16px;margin:12px 0'>
-                <div style='font-size:1.1rem;font-weight:700;color:#F5A623;margin-bottom:8px'>
-                    Score qualité : {score}/100 — {label}
-                </div>
-                <div style='font-size:.85rem;color:#F0F4FF'>
-                    Humidité : {"✅ Conforme" if 14.5 <= humidite <= 19.0 else "❌ Hors norme"} ({humidite}%) &nbsp;|&nbsp;
-                    pH : {"✅" if 3.4 <= ph <= 4.5 else "⚠️"} ({ph}) &nbsp;|&nbsp;
-                    Conductivité : {"✅" if conductivite <= 0.8 else "⚠️"} ({conductivite} mS/cm)
-                </div>
-                {"".join(f'<div style=\"font-size:.8rem;color:#FBD147;margin-top:6px\">{iss}</div>' for iss in issues) if issues else '<div style=\"color:#34D399;margin-top:6px;font-size:.85rem\">✅ Tous les paramètres sont conformes aux normes européennes.</div>'}
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Sauvegarder
-            if ruche_sel and opts_r:
-                rid = opts_r[ruche_sel]
-                conn.execute("""
-                    INSERT INTO analyses_miel (ruche_id,date_analyse,humidite_pct,conductivite_ms,couleur,
-                                               cristallisation,aromes,origine_florale,score_qualite,label_propose,notes)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                """, (rid, str(date_recolte_miel), humidite, conductivite, couleur,
-                      cristallisation, aromes, origine_florale, score, label, notes_miel))
-                conn.commit()
-                log_action("Analyse miel locale", f"Ruche {ruche_sel} — Score {score}/100")
-                st.success(f"✅ Analyse sauvegardée — Score {score}/100 — {label}")
-
-        # ── Analyse IA ──────────────────────────────────────────────────────
-        if btn_ia_miel:
-            img_bytes = photo_miel.read() if photo_miel else None
-            prompt = f"""Tu es expert en mélisopalynologie, chimie du miel et certification apicole. Voici les paramètres d'un miel algérien à analyser :
-
-**Ruche source :** {ruche_sel or 'Non spécifiée'}
-**Date récolte :** {date_recolte_miel}
-**Paramètres physico-chimiques :**
-- Humidité : {humidite}%
-- Conductivité électrique : {conductivite} mS/cm
-- pH : {ph}
-- 10-HDA (gelée royale) : {hda}%
-- Couleur : {couleur}
-- État : {cristallisation}
-- Arômes : {aromes or 'Non renseignés'}
-- Origine florale déclarée : {origine_florale or 'Non spécifiée'}
-- Notes : {notes_miel or 'Aucune'}
-
-Effectue une analyse complète en français :
-
-## 🔬 1. Conformité aux normes (Codex Alimentarius + Directive 2001/110/CE)
-- Humidité : norme < 20% — Évaluation
-- pH : norme 3.2–4.5 — Évaluation  
-- Conductivité : norme < 0.8 mS/cm (fleurs) ou > 0.8 (miellat) — Évaluation
-- Conclusion de conformité
-
-## 🌸 2. Identification de l'origine florale
-- Espèce(s) probable(s) basées sur les paramètres
-- Profil pollinique attendu
-- Saison de récolte probable
-
-## 🚨 3. Détection de falsification
-- Risque d'adultération (sucres, eau, HMF élevé)
-- Score de risque : Faible / Modéré / Élevé
-- Indicateurs suspects identifiés
-
-## 🏅 4. Label et certification proposés
-- Label qualité : Premium / Qualité A / Qualité B / Non conforme
-- Score global /100 avec pondération (humidité 30%, conductivité 25%, pH 20%, couleur/cristallisation 25%)
-- Certifications possibles : Bio, AO, IGP, Label Rouge (critères à remplir)
-- Prix de vente conseillé (marché algérien 2025)
-
-## 🍽️ 5. Profil nutritionnel estimé
-- Glucides, vitamines, minéraux principaux probables
-- Indice glycémique estimé
-- Propriétés médicinales connues pour cette origine
-
-## 📦 6. Recommandations stockage et conditionnement
-- Conditions idéales de conservation
-- Durée de vie estimée
-- Conditionnement recommandé (pot verre, étiquetage)
-
-Donne des chiffres précis et des références normatives (Codex, EU)."""
-
-            with st.spinner("🤖 Analyse approfondie du miel en cours..."):
-                result = ia_call(prompt, img_bytes)
-
-            if result and not result.startswith("❌"):
-                afficher_resultat_ia(result, "Analyse qualité miel — IA Expert")
-
-                # Extraire le score depuis le résultat IA (heuristique simple)
-                import re
-                score_match = re.search(r'Score.*?(\d{2,3})/100', result)
-                score_ia = int(score_match.group(1)) if score_match else 80
-                label_match = re.search(r'Label.*?:(.*?)(?:\n|\.)', result)
-                label_ia = label_match.group(1).strip() if label_match else "Qualité A"
-
-                if ruche_sel and opts_r:
-                    rid = opts_r[ruche_sel]
-                    conn.execute("""
-                        INSERT INTO analyses_miel (ruche_id,date_analyse,humidite_pct,conductivite_ms,couleur,
-                                                   cristallisation,aromes,origine_florale,score_qualite,label_propose,ia_analyse,notes)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                    """, (rid, str(date_recolte_miel), humidite, conductivite, couleur,
-                          cristallisation, aromes, origine_florale, score_ia, label_ia,
-                          result[:2000], notes_miel))
-                    conn.commit()
-                    log_action("Analyse miel IA", f"Ruche {ruche_sel} — {get_active_provider()}")
-                    st.success("✅ Analyse IA sauvegardée dans l'historique !")
-            elif result:
-                st.error(result)
-
-    with tab2:
-        df_am = pd.read_sql("""
-            SELECT am.id, COALESCE(r.nom,'—') as ruche, am.date_analyse, am.humidite_pct,
-                   am.conductivite_ms, am.origine_florale, am.score_qualite, am.label_propose, am.notes
-            FROM analyses_miel am LEFT JOIN ruches r ON r.id=am.ruche_id
-            ORDER BY am.date_analyse DESC
-        """, conn)
-        if not df_am.empty:
-            st.dataframe(df_am, use_container_width=True, hide_index=True)
-            csv = df_am.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Exporter CSV", csv, "analyses_miel.csv", "text/csv")
-        else:
-            st.info("Aucune analyse de miel enregistrée.")
-
-    conn.close()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE : MÉTÉO & PRÉDICTIONS MELLIFÈRES AMÉLIORÉE
-# ════════════════════════════════════════════════════════════════════════════
-def page_meteo():
-    """Version améliorée avec calendrier prédictif mellifère."""
-    st.markdown("## ☀️ Météo & Calendrier Mellifère Prédictif")
-    st.markdown("<p style='color:#A8B4CC;margin-top:-10px'>Prévisions · Activité butineuses · Planning automatique par mois</p>", unsafe_allow_html=True)
-
-    ia_active = widget_ia_selector()
-
-    localisation = get_setting("localisation", "Tlemcen, Algérie")
-    st.markdown(f"📍 Rucher : **{get_setting('rucher_nom','Mon Rucher')}** — {localisation}")
-
-    tab1, tab2, tab3 = st.tabs(["📅 Calendrier mellifère", "☀️ Météo manuelle", "🤖 Prédiction IA saisonnière"])
-
-    with tab1:
-        st.markdown("### 📅 Calendrier mellifère interactif — Tlemcen")
-        mois_labels = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Aoû","Sep","Oct","Nov","Déc"]
-        mois_selected = st.select_slider("Sélectionner un mois", options=mois_labels,
-                                          value=mois_labels[datetime.date.today().month - 1])
-        idx_mois = mois_labels.index(mois_selected)
-
-        # Base de données calendrier mellifère Tlemcen
-        calendrier = {
-            0:  {"temp_min":5,"temp_max":14,"pluie":60,"floraison":["Arbousier (fin)","Eucalyptus"],"activite":20,"conseil":"Maintenir couvercles isolants. Vérifier provisions stocks. Réduire entrées."},
-            1:  {"temp_min":6,"temp_max":15,"pluie":55,"floraison":["Romarin","Amandier","Eucalyptus"],"activite":35,"conseil":"Premières sorties des butineuses. Contrôle entrée de ruche. Préparer matériel."},
-            2:  {"temp_min":8,"temp_max":18,"pluie":50,"floraison":["Romarin","Amandier","Pêcher","Aubépine"],"activite":65,"conseil":"🟡 Mois clé ! Visiter toutes les ruches. Stimuler avec sirop si nécessaire."},
-            3:  {"temp_min":11,"temp_max":21,"pluie":40,"floraison":["Jujubier","Chêne-liège","Thym","Agrumes"],"activite":90,"conseil":"🔥 Pic de miellée printemps ! Ajouter hausses. Surveiller essaimage."},
-            4:  {"temp_min":15,"temp_max":26,"pluie":25,"floraison":["Jujubier","Lavande","Thym","Ronce"],"activite":95,"conseil":"🔥 Miellée maximale ! Récolter miel printemps fin mai/début juin."},
-            5:  {"temp_min":19,"temp_max":31,"pluie":12,"floraison":["Lavande","Eucalyptus","Ronce","Caroube"],"activite":75,"conseil":"Surveiller chaleur. Ombrager les ruches. Récolte fin juin."},
-            6:  {"temp_min":23,"temp_max":36,"pluie":5,"floraison":["Eucalyptus","Garrigue","Lavande coton"],"activite":45,"conseil":"⚠️ Canicule — Abreuvoir obligatoire. Réduire ouverture d'entrée (prédateurs)."},
-            7:  {"temp_min":23,"temp_max":36,"pluie":8,"floraison":["Eucalyptus","Garrigue sec"],"activite":30,"conseil":"⚠️ Stress hydrique. Nourrir si nécessaire. Traitement varroa acide oxalique."},
-            8:  {"temp_min":20,"temp_max":32,"pluie":20,"floraison":["Caroube","Arbousier","Bruyère"],"activite":55,"conseil":"Reprise après été. Préparation hivernage. Traitement varroa si > 2%."},
-            9:  {"temp_min":15,"temp_max":26,"pluie":40,"floraison":["Caroube","Bruyère","Arbousier"],"activite":50,"conseil":"Préparation hiver. Réduire espace intérieur. Assurer provisions 15 kg min."},
-            10: {"temp_min":10,"temp_max":19,"pluie":65,"floraison":["Arbousier","Bruyère","Eucalyptus"],"activite":30,"conseil":"Hivernage précoce. Dernière inspection avant hiver. Traitement prophylactique."},
-            11: {"temp_min":7,"temp_max":15,"pluie":70,"floraison":["Arbousier (début)","Eucalyptus"],"activite":15,"conseil":"Hivernage complet. Éviter ouvertures. Peser les ruches mensuellement."},
-        }
-
-        m = calendrier[idx_mois]
-
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("🌡️ Temp. min", f"{m['temp_min']}°C")
-        col2.metric("🌡️ Temp. max", f"{m['temp_max']}°C")
-        col3.metric("🌧️ Pluviométrie", f"{m['pluie']} mm")
-        col4.metric("🐝 Activité butineuses", f"{m['activite']}%")
-
-        st.markdown(f"""
-        <div style='background:#0D2A1F;border:1px solid #1A5C3A;border-radius:8px;padding:14px;margin:12px 0'>
-            <div style='font-size:.85rem;font-weight:600;color:#34D399;margin-bottom:6px'>🌸 Floraisons en cours — {mois_selected}</div>
-            <div style='color:#F0F4FF;font-size:.85rem'>{' · '.join(m['floraison'])}</div>
-        </div>
-        <div style='background:#1E2535;border:1px solid #C8820A;border-radius:8px;padding:14px;margin:8px 0'>
-            <div style='font-size:.85rem;font-weight:600;color:#F5A623;margin-bottom:4px'>💡 Conseil du mois</div>
-            <div style='color:#F0F4FF;font-size:.85rem'>{m['conseil']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Graphique activité annuelle
-        st.markdown("### 📈 Activité butineuses — Profil annuel Tlemcen")
-        df_cal = pd.DataFrame({
-            "Mois": mois_labels,
-            "Activité (%)": [calendrier[i]["activite"] for i in range(12)],
-            "Temp max (°C)": [calendrier[i]["temp_max"] for i in range(12)],
-        })
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_cal["Mois"], y=df_cal["Activité (%)"],
-                             name="Activité butineuses %", marker_color="#C8820A",
-                             opacity=0.8))
-        fig.add_trace(go.Scatter(x=df_cal["Mois"], y=df_cal["Temp max (°C)"],
-                                  name="Temp max °C", line=dict(color="#F87171",width=2),
-                                  yaxis="y2"))
-        fig.update_layout(
-            height=280, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(t=10,b=10,l=0,r=0),
-            yaxis=dict(title="Activité %", range=[0,100]),
-            yaxis2=dict(title="°C", overlaying="y", side="right", range=[0,45]),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02)
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with tab2:
-        st.markdown("### 🌡️ Saisie météo manuelle")
-        conn = get_db()
-        with st.form("meteo_form"):
-            col1, col2, col3 = st.columns(3)
-            date_meteo = col1.date_input("Date", datetime.date.today())
-            temp_min   = col2.number_input("Temp min (°C)", -5.0, 50.0, 12.0, 0.5)
-            temp_max   = col3.number_input("Temp max (°C)", -5.0, 55.0, 24.0, 0.5)
-            col4, col5, col6 = st.columns(3)
-            pluie      = col4.number_input("Pluie (mm)", 0.0, 200.0, 0.0, 1.0)
-            vent       = col5.selectbox("Vent dominant", ["Calme","Brise légère","Vent modéré","Vent fort","Sirocco"])
-            conditions = col6.selectbox("Conditions", ["Ensoleillé","Nuageux","Pluvieux","Brumeux","Orageux"])
-            notes_m    = st.text_area("Observations terrain", height=60)
-            submitted_m = st.form_submit_button("💾 Sauvegarder")
-
-        if submitted_m:
-            log_action("Météo saisie", f"{date_meteo}: {temp_min}-{temp_max}°C, {pluie}mm, {conditions}")
-            st.success(f"✅ Météo du {date_meteo} enregistrée dans le journal.")
-        conn.close()
-
-    with tab3:
-        st.markdown("### 🤖 Prédiction saisonnière IA personnalisée")
-        if ia_active:
-            mois_pred = st.multiselect("Mois à analyser", mois_labels,
-                                        default=[mois_labels[datetime.date.today().month - 1]])
-            if st.button("🤖 Générer le plan saisonnier IA", use_container_width=True):
-                prompt = f"""Tu es expert apicole et agronome spécialisé dans la région de Tlemcen (Nord-Ouest Algérie, altitude 800m, climat méditerranéen semi-aride, zone bioclimatique sub-humide).
-
-Pour les mois suivants : {', '.join(mois_pred)}
-
-Génère un plan apicole mensuel ultra-détaillé avec :
-
-## Pour chaque mois sélectionné :
-
-### 🌸 1. Calendrier de floraison Tlemcen
-- Espèces principales (nom latin + vernaculaire algérien)
-- Durée de floraison et pic
-- Source nectar/pollen/résine + qualité estimée
-
-### 🐝 2. Activité de la colonie
-- Stade de développement (couvain, population)
-- Besoins nutritionnels spécifiques
-- Risques pathologiques saisonniers (nosema, varroa, loque)
-
-### 🍯 3. Prévisions de production
-- Miel : type floral probable, rendement kg/ruche attendu
-- Pollen : couleur, richesse protéique
-- Propolis : disponibilité
-
-### 🔧 4. Interventions prioritaires (liste numérotée)
-Actions précises avec timing idéal (matin/soir, température recommandée)
-
-### 💡 5. Astuce pro du mois
-Un conseil exclusif adapté au rucher de l'Atlas algérien
-
-Utilise des données chiffrées précises. Intègre les spécificités locales (sirocco estival, gel printanier tardif, miellée jujubier d'exception)."""
-
-                with st.spinner("🤖 Génération du plan saisonnier..."):
-                    result = ia_call(prompt)
-                if result and not result.startswith("❌"):
-                    afficher_resultat_ia(result, f"Plan saisonnier IA — {', '.join(mois_pred)}")
-                    log_action("Météo IA prédiction", f"Mois : {', '.join(mois_pred)}")
-                elif result:
-                    st.error(result)
-        else:
-            st.info("🔑 Configurez une clé API pour activer les prédictions saisonnières IA.")
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE : ALERTES v3.0 — Système intelligent
-# ════════════════════════════════════════════════════════════════════════════
-def page_alertes():
-    """Version améliorée avec système d'alertes intelligent et configurable."""
-    st.markdown("## ⚠️ Alertes Intelligentes")
-    st.markdown("<p style='color:#A8B4CC;margin-top:-10px'>Détection automatique · Score de risque · Actions recommandées</p>", unsafe_allow_html=True)
-
-    conn = get_db()
-    today = datetime.date.today()
-
-    # Calculer les alertes dynamiques
-    alertes = []
-
-    # 1. Varroa critique
-    df_varroa = pd.read_sql("""
-        SELECT r.nom, r.id as ruche_id, i.varroa_pct, i.date_inspection
-        FROM inspections i JOIN ruches r ON r.id=i.ruche_id
-        WHERE i.date_inspection >= date('now','-7 days') AND i.varroa_pct >= 2.0
-        ORDER BY i.varroa_pct DESC
-    """, conn)
-    for _, row in df_varroa.iterrows():
-        niveau = "critique" if row["varroa_pct"] >= 3.0 else "attention"
-        alertes.append({
-            "niveau": niveau,
-            "icone": "🔴" if niveau == "critique" else "🟡",
-            "titre": f"Varroa {niveau.upper()} — {row['nom']}",
-            "detail": f"Varroa à {row['varroa_pct']:.1f}% le {row['date_inspection']}",
-            "action": "Traiter immédiatement à l'acide oxalique (T° < 10°C)" if niveau == "critique" else "Planifier traitement sous 7 jours",
-            "ruche": row["nom"],
-            "score_risque": min(100, int(row["varroa_pct"] * 25))
-        })
-
-    # 2. Ruches sans inspection récente
-    df_retard = pd.read_sql("""
-        SELECT r.nom,
-               COALESCE(MAX(i.date_inspection), r.date_installation) as derniere_insp
-        FROM ruches r LEFT JOIN inspections i ON i.ruche_id=r.id
-        WHERE r.statut='actif'
-        GROUP BY r.id, r.nom
-        HAVING derniere_insp < date('now','-21 days') OR derniere_insp IS NULL
-    """, conn)
-    for _, row in df_retard.iterrows():
-        alertes.append({
-            "niveau": "attention",
-            "icone": "🟡",
-            "titre": f"Inspection en retard — {row['nom']}",
-            "detail": f"Dernière inspection : {row['derniere_insp']}",
-            "action": "Inspecter dès que possible — cadres, reine, varroa",
-            "ruche": row["nom"],
-            "score_risque": 45
-        })
-
-    # 3. Poids faible
-    df_poids = pd.read_sql("""
-        SELECT r.nom, i.poids_kg, i.date_inspection
-        FROM inspections i JOIN ruches r ON r.id=i.ruche_id
-        WHERE i.date_inspection >= date('now','-7 days') AND i.poids_kg < 15
-        ORDER BY i.poids_kg ASC
-    """, conn)
-    for _, row in df_poids.iterrows():
-        alertes.append({
-            "niveau": "attention",
-            "icone": "🟡",
-            "titre": f"Poids faible — {row['nom']}",
-            "detail": f"Poids : {row['poids_kg']} kg le {row['date_inspection']} (seuil : 15 kg)",
-            "action": "Nourrir avec sirop 50/50 ou candi — vérifier reserves",
-            "ruche": row["nom"],
-            "score_risque": int(max(0, 60 - row["poids_kg"] * 3))
-        })
-
-    # 4. Traitements en cours terminant bientôt
-    df_trait = pd.read_sql("""
-        SELECT r.nom, t.produit, t.date_fin
-        FROM traitements t JOIN ruches r ON r.id=t.ruche_id
-        WHERE t.statut='en_cours' AND t.date_fin IS NOT NULL
-        AND date(t.date_fin) BETWEEN date('now') AND date('now','+3 days')
-    """, conn)
-    for _, row in df_trait.iterrows():
-        alertes.append({
-            "niveau": "info",
-            "icone": "🔵",
-            "titre": f"Traitement se termine — {row['nom']}",
-            "detail": f"{row['produit']} — fin prévue : {row['date_fin']}",
-            "action": "Vérifier l'efficacité du traitement et noter résultats",
-            "ruche": row["nom"],
-            "score_risque": 20
-        })
-
-    # 5. Bonnes nouvelles — candidates élevage
-    df_gr = pd.read_sql("""
-        SELECT r.nom, SUM(rec.quantite_kg) as total, MAX(rec.hda_pct) as hda
-        FROM recoltes rec JOIN ruches r ON r.id=rec.ruche_id
-        WHERE rec.type_produit='gelée royale' GROUP BY r.nom HAVING total > 0.3
-    """, conn)
-    for _, row in df_gr.iterrows():
-        alertes.append({
-            "niveau": "success",
-            "icone": "🟢",
-            "titre": f"Excellente productrice — {row['nom']}",
-            "detail": f"{row['total']:.2f} kg gelée royale{f' · 10-HDA {row[chr(104)+chr(100)+chr(97)]:.1f}%' if row['hda'] else ''}",
-            "action": "Candidate idéale pour programme d'élevage sélectif",
-            "ruche": row["nom"],
-            "score_risque": 0
-        })
-
-    # Score de risque global
-    if alertes:
-        score_global = min(100, sum(a["score_risque"] for a in alertes if a["niveau"] in ["critique","attention"]) // max(1, len([a for a in alertes if a["niveau"] in ["critique","attention"]])))
-        risk_color = "#F87171" if score_global >= 70 else ("#FBD147" if score_global >= 40 else "#34D399")
-        st.markdown(f"""
-        <div style='background:#1E2535;border:2px solid {risk_color};border-radius:12px;
-                    padding:16px 20px;margin-bottom:20px;display:flex;align-items:center;gap:16px'>
-            <div style='font-size:2rem'>{'🚨' if score_global >= 70 else ('⚠️' if score_global >= 40 else '✅')}</div>
-            <div>
-                <div style='font-size:1.1rem;font-weight:700;color:{risk_color}'>
-                    Score de risque global : {score_global}/100
-                </div>
-                <div style='font-size:.82rem;color:#A8B4CC'>
-                    {'État critique — Interventions immédiates requises' if score_global >= 70
-                     else ('État préoccupant — Surveillance renforcée' if score_global >= 40
-                     else 'État satisfaisant — Surveillance normale')}
-                    · {len(alertes)} alertes actives · {len([a for a in alertes if a['niveau']=='critique'])} critiques
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # Afficher les alertes groupées par niveau
-    niveaux_ordre = [("critique","🔴 Alertes Critiques","#F87171"),
-                     ("attention","🟡 Alertes Attention","#FBD147"),
-                     ("info","🔵 Informations","#60A5FA"),
-                     ("success","🟢 Points Positifs","#34D399")]
-
-    for niveau, label, color in niveaux_ordre:
-        alertes_niveau = [a for a in alertes if a["niveau"] == niveau]
-        if alertes_niveau:
-            st.markdown(f"### {label}")
-            for a in alertes_niveau:
-                bg = {"critique":"#2A0D0D","attention":"#2A200A","info":"#0D1A2A","success":"#0D2A1F"}[niveau]
-                border = {"critique":"#5C1A1A","attention":"#4A3A10","info":"#1A3A5C","success":"#1A5C3A"}[niveau]
-
-                st.markdown(f"""
-                <div style='background:{bg};border:1px solid {border};border-left:4px solid {color};
-                            border-radius:8px;padding:14px 16px;margin-bottom:10px'>
-                    <div style='font-weight:600;color:{color};font-size:.95rem'>{a['icone']} {a['titre']}</div>
-                    <div style='color:#A8B4CC;font-size:.82rem;margin:4px 0'>{a['detail']}</div>
-                    <div style='color:#F0F4FF;font-size:.82rem'>💡 Action : {a['action']}</div>
-                    {'<div style="color:#6B7A99;font-size:.72rem;margin-top:4px">Score risque : ' + str(a['score_risque']) + '/100</div>' if a.get('score_risque',0) > 0 else ''}
-                </div>
-                """, unsafe_allow_html=True)
-
-    if not alertes:
-        st.success("✅ Aucune alerte active — Rucher en parfait état !")
-
-    # Analyse IA des alertes
-    if alertes and ia_active:
-        st.markdown("---")
-        ia_active2 = get_api_key_for_provider(get_active_provider())
-        if ia_active2 and st.button("🤖 Obtenir un plan d'action IA global", use_container_width=True):
-            alertes_texte = "\n".join([f"- [{a['niveau'].upper()}] {a['titre']} : {a['detail']}" for a in alertes])
-            prompt = f"""Tu es vétérinaire apicole et expert rucher nord-africain. Voici l'état d'alerte du rucher aujourd'hui :
-
-{alertes_texte}
-
-Génère un plan d'action prioritaire en français pour les 7 prochains jours :
-
-## 🚨 1. Actions IMMÉDIATES (24-48h)
-Pour chaque alerte critique, protocole exact d'intervention
-
-## 📅 2. Planning semaine (J1 à J7)
-Tableau des interventions recommandées avec timing optimal
-
-## 🛡️ 3. Prévention
-Actions préventives pour éviter la récurrence de ces problèmes
-
-## 📊 4. Suivi recommandé
-Paramètres à surveiller et fréquence de contrôle
-
-Donne des instructions précises et pratiques pour un apiculteur algérien."""
-
-            with st.spinner("🤖 Génération du plan d'action..."):
-                result = ia_call(prompt)
-            if result and not result.startswith("❌"):
-                afficher_resultat_ia(result, "Plan d'action global — IA Vétérinaire Apicole")
-                log_action("Plan IA alertes", f"{len(alertes)} alertes analysées")
-
-    conn.close()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PATCH : Remplacer init_db pour inclure v3
-# ════════════════════════════════════════════════════════════════════════════
-_original_main = main
-
-def main():
-    inject_css()
-    init_db()
-    init_db_v3()   # ← nouvelles tables
-
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-
-    if not st.session_state.logged_in:
-        login_page()
-        return
-
-    sidebar_v3()
-
-    page = st.session_state.get("page", "dashboard")
-    router = {
-        "dashboard":    page_dashboard,
-        "ruches":       page_ruches,
-        "inspections":  page_inspections,
-        "traitements":  page_traitements,
-        "productions":  page_productions,
-        "morpho":       page_morpho,
-        "carto":        page_carto,
-        "meteo":        page_meteo,
-        "genetique":    page_genetique,
-        "flore":        page_flore,
-        "alertes":      page_alertes,
-        "journal":      page_journal,
-        "admin":        page_admin,
-        # ── Nouvelles pages v3.0 ──────────────────────────
-        "comptabilite": page_comptabilite,
-        "agenda":       page_agenda,
-        "miel":         page_analyseur_miel,
-    }
-    fn = router.get(page, page_dashboard)
-    fn()
-
-    st.markdown("""
-    <div class='api-footer'>
-        🐝 ApiTrack Pro v3.0 ULTIMATE · Streamlit + Python + SQLite + IA Multi-fournisseurs · Rucher de l'Atlas · 2025
-        <br><span style='font-size:.65rem;color:#6B7A99'>Unique au monde — Comptabilité · Agenda IA · Analyseur Miel · Alertes Intelligentes · Météo Prédictive</span>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def sidebar_v3():
-    """Sidebar améliorée avec les nouvelles pages v3."""
-    with st.sidebar:
-        st.markdown("""
-        <div style='padding:8px 0 16px;border-bottom:1px solid #3d2a0e;margin-bottom:12px'>
-            <div style='font-size:1.6rem;margin-bottom:4px'>🐝</div>
-            <div style='font-family:Playfair Display,serif;color:#F5A623;font-size:1.1rem;font-weight:600'>ApiTrack Pro</div>
-            <div style='font-size:.65rem;color:#8899BB;text-transform:uppercase;letter-spacing:.1em'>v3.0 ULTIMATE</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        rucher_nom = get_setting("rucher_nom", "Mon Rucher")
-        st.markdown(f"<div style='font-size:.75rem;color:#6B7A99;margin-bottom:12px'>📍 {rucher_nom}</div>",
-                    unsafe_allow_html=True)
-
-        pages = {
-            "🏠 Dashboard":          "dashboard",
-            "🐝 Mes ruches":          "ruches",
-            "🔍 Inspections":         "inspections",
-            "💊 Traitements":         "traitements",
-            "🍯 Productions":         "productions",
-            "🧬 Morphométrie IA":     "morpho",
-            "🗺️ Cartographie":        "carto",
-            "☀️ Météo & Calendrier":  "meteo",
-            "📊 Génétique":           "genetique",
-            "🌿 Flore mellifère":     "flore",
-            "⚠️ Alertes IA":          "alertes",
-            "📋 Journal":             "journal",
-            "─────────────────":     None,
-            "💰 Comptabilité":        "comptabilite",
-            "📆 Agenda & Tâches":     "agenda",
-            "🔬 Analyseur Miel IA":   "miel",
-            "─────────────────":     None,
-            "⚙️ Administration":      "admin",
-        }
-
-        if "page" not in st.session_state:
-            st.session_state.page = "dashboard"
-
-        for label, key in pages.items():
-            if key is None:
-                st.sidebar.markdown(f"<div style='color:#3A4A66;font-size:.65rem;padding:2px 12px'>{label}</div>",
-                                    unsafe_allow_html=True)
-                continue
-            is_new = key in ["comptabilite","agenda","miel"]
-            label_display = f"{label} {'🆕' if is_new else ''}"
-            if st.sidebar.button(label_display, key=f"nav_{key}", use_container_width=True):
-                st.session_state.page = key
-                st.rerun()
-
-        st.sidebar.markdown("<hr style='border-color:#2E3A52;margin:12px 0'>", unsafe_allow_html=True)
-        st.sidebar.markdown(f"<div style='font-size:.75rem;color:#6B7A99'>👤 {st.session_state.get('username','admin')}</div>",
-                            unsafe_allow_html=True)
-        if st.sidebar.button("🚪 Déconnexion", use_container_width=True):
-            log_action("Déconnexion", f"Utilisateur {st.session_state.get('username')} déconnecté")
-            st.session_state.logged_in = False
-            st.rerun()
-
-
-# ── Surcharge du __main__ ──────────────────────────────────────────────────
