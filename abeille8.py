@@ -1,12 +1,14 @@
 """
 ApiTrack Pro – Application de gestion apicole professionnelle
 Streamlit + Python + SQLite
-VERSION 3.0 - AVEC FONCTIONNALITÉS AVANCÉES UNIQUES
+VERSION 3.1 - AVEC ANALYSE VISUELLE AUTOMATIQUE
+- Analyse environnementale par photo (IA vision)
+- Morphométrie par photogrammétrie (étalon pièce)
 - Assistant vocal mains libres
 - Généalogie et prédiction de consanguinité
 - Bourse aux mâles collaborative
 - Scanner visuel de maladies
-- Prédiction de transhumance (NDVI + météo)
+- Prédiction de transhumance
 """
 
 import streamlit as st
@@ -17,12 +19,12 @@ import hashlib
 import json
 import os
 import datetime
-from pathlib import Path
 import base64
 import tempfile
 import urllib.request
 import urllib.error
 import re
+import math
 
 # ── Plotly (graphiques) ──────────────────────────────────────────────────────
 import plotly.express as px
@@ -36,7 +38,7 @@ try:
 except ImportError:
     FOLIUM_OK = False
 
-# ── TensorFlow (optionnel – deep learning) ───────────────────────────────────
+# ── TensorFlow (optionnel) ───────────────────────────────────────────────────
 try:
     import tensorflow as tf
     TF_OK = True
@@ -50,14 +52,14 @@ try:
 except ImportError:
     SH_OK = False
 
-# ── Anthropic (IA gratuite via Claude) ───────────────────────────────────────
+# ── Anthropic (IA) ───────────────────────────────────────────────────────────
 try:
     import anthropic
     ANTHROPIC_OK = True
 except ImportError:
     ANTHROPIC_OK = False
 
-# ── Nouvelles bibliothèques pour fonctionnalités avancées ────────────────────
+# ── Bibliothèques pour fonctionnalités avancées ──────────────────────────────
 try:
     import speech_recognition as sr
     from gtts import gTTS
@@ -77,6 +79,13 @@ try:
     PIL_OK = True
 except ImportError:
     PIL_OK = False
+
+# Pour le canevas de pointage
+try:
+    from streamlit_drawable_canvas import st_canvas
+    CANVAS_OK = True
+except ImportError:
+    CANVAS_OK = False
 
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION STREAMLIT
@@ -440,7 +449,7 @@ def inject_css():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# BASE DE DONNÉES SQLITE (AJOUT DES NOUVELLES TABLES)
+# BASE DE DONNÉES SQLITE
 # ════════════════════════════════════════════════════════════════════════════
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -555,7 +564,6 @@ def init_db():
         value TEXT
     );
 
-    -- ========== NOUVELLES TABLES POUR FONCTIONNALITÉS AVANCÉES ==========
     CREATE TABLE IF NOT EXISTS pedigree (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         reine_fille_id INTEGER REFERENCES ruches(id),
@@ -671,9 +679,8 @@ def _insert_demo_data(c):
 
     c.execute("INSERT OR IGNORE INTO settings VALUES ('rucher_nom','Rucher de l Atlas')")
     c.execute("INSERT OR IGNORE INTO settings VALUES ('localisation','Tlemcen, Algérie')")
-    c.execute("INSERT OR IGNORE INTO settings VALUES ('version','3.0.0')")
+    c.execute("INSERT OR IGNORE INTO settings VALUES ('version','3.1.0')")
 
-    # Données démo pour nouvelles fonctionnalités
     c.execute("INSERT OR IGNORE INTO pedigree (reine_fille_id, reine_mere_id, ruche_pere_id, date_naissance) VALUES (2,1,3,'2024-05-01')")
     c.execute("INSERT OR IGNORE INTO male_stocks (ruche_id, race_male, score_vsh, rayon_km, contact_prefere) VALUES (3,'intermissa',85,5,'contact@exemple.dz')")
 
@@ -752,7 +759,7 @@ def get_setting(key, default=""):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# MOTEUR IA MULTI-FOURNISSEURS — 100% GRATUITS
+# MOTEUR IA MULTI-FOURNISSEURS
 # ════════════════════════════════════════════════════════════════════════════
 
 IA_PROVIDERS = {
@@ -763,16 +770,16 @@ IA_PROVIDERS = {
         "prefix":     "sk-ant-",
         "models":     ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
         "default":    "claude-3-5-sonnet-20241022",
-        "quota":      "~5$ crédits offerts · ~500 analyses",
+        "quota":      "~5$ crédits offerts",
         "vision":     True,
         "type":       "anthropic",
     },
-    "🌟 Gemini (Google AI Studio)": {
+    "🌟 Gemma 4 / Gemini (Google)": {
         "key":        "google_api_key",
         "env":        "GOOGLE_API_KEY",
         "url":        "https://aistudio.google.com/app/apikey",
         "prefix":     "AIzaSy",
-        "models":     ["gemini-2.0-flash", "gemini-1.5-flash"],
+        "models":     ["gemini-2.0-flash", "gemma-4-31b-it", "gemini-1.5-flash"],
         "default":    "gemini-2.0-flash",
         "quota":      "Gratuit · 1 500 req/jour",
         "vision":     True,
@@ -802,7 +809,7 @@ IA_PROVIDERS = {
         "type":       "openai_compat",
         "base_url":   "https://openrouter.ai/api/v1",
     },
-    "🇪🇺 Mistral AI (GDPR)": {
+    "🌍 Mistral AI (GDPR)": {
         "key":        "mistral_api_key",
         "env":        "MISTRAL_API_KEY",
         "url":        "https://console.mistral.ai/api-keys",
@@ -838,9 +845,6 @@ def get_api_key_for_provider(provider_name):
 
 
 def ia_call(prompt_text, image_bytes=None, json_mode=False):
-    """
-    Appel unifié vers le fournisseur IA actif.
-    """
     provider_name = get_active_provider()
     model         = get_active_model()
     api_key       = get_api_key_for_provider(provider_name)
@@ -851,7 +855,6 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
         return None
 
     try:
-        # ── 1. ANTHROPIC ──────────────────────────────────────────────────
         if ptype == "anthropic" and ANTHROPIC_OK:
             client = anthropic.Anthropic(api_key=api_key)
             content = []
@@ -866,7 +869,6 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
                                           messages=[{"role": "user", "content": content}])
             return resp.content[0].text
 
-        # ── 2. GOOGLE (Gemini API) ────────────────────────────────────────
         elif ptype == "google":
             parts = []
             if image_bytes and cfg.get("vision"):
@@ -886,7 +888,6 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
                 data = json.loads(r.read())
             return data["candidates"][0]["content"]["parts"][0]["text"]
 
-        # ── 3. OPENAI-COMPATIBLE (Groq, OpenRouter, Mistral) ──────────────
         elif ptype == "openai_compat":
             base_url = cfg.get("base_url", "")
             messages = []
@@ -925,7 +926,6 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
 
 
 def ia_call_json(prompt_text, image_bytes=None):
-    """Appel IA avec retour JSON parsé."""
     result = ia_call(prompt_text, image_bytes, json_mode=True)
     if not result or result.startswith("❌"):
         return {"error": result or "Pas de réponse"}
@@ -952,7 +952,7 @@ def ia_call_json(prompt_text, image_bytes=None):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# FONCTIONS IA MÉTIER — utilisent ia_call() → tous fournisseurs supportés
+# FONCTIONS IA MÉTIER
 # ════════════════════════════════════════════════════════════════════════════
 
 def ia_analyser_morphometrie(aile, largeur, cubital, glossa, tomentum, pigmentation,
@@ -1076,7 +1076,6 @@ Réponds UNIQUEMENT avec un objet JSON valide (pas de texte avant/après, pas de
 
 
 def afficher_resultat_ia(texte, titre="🤖 Analyse IA"):
-    """Affiche le résultat IA dans un bloc stylisé avec badge fournisseur."""
     provider = get_active_provider()
     model    = get_active_model()
     st.markdown(f"""
@@ -1101,10 +1100,6 @@ def afficher_resultat_ia_zone(texte, titre="🤖 Analyse IA"):
 
 
 def widget_ia_selector():
-    """
-    Widget sélecteur de fournisseur IA.
-    Retourne True si une clé est configurée pour le fournisseur actif.
-    """
     provider_names = list(IA_PROVIDERS.keys())
     current = get_active_provider()
     idx = provider_names.index(current) if current in provider_names else 0
@@ -1186,7 +1181,7 @@ def widget_cle_api():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SIDEBAR (AJOUT DES NOUVELLES PAGES)
+# SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════
 def sidebar():
     with st.sidebar:
@@ -1214,13 +1209,11 @@ def sidebar():
             "🌿 Flore mellifère": "flore",
             "⚠️ Alertes": "alertes",
             "📋 Journal": "journal",
-            # ========== NOUVELLES PAGES ==========
             "🎤 Inspection Vocale": "voice_inspection",
             "🧬 Pedigree & Sélection": "pedigree",
             "🤝 Bourse aux Mâles": "male_market",
             "📸 Scanner Cadre": "cadre_scanner",
             "🚚 Prédiction Transhumance": "transhumance",
-            # =====================================
             "⚙️ Administration": "admin",
         }
 
@@ -1621,451 +1614,6 @@ def page_productions():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : MORPHOMÉTRIE IA
-# ════════════════════════════════════════════════════════════════════════════
-RUTTNER_REF = {
-    "intermissa":   {"aile": (8.9, 9.4), "cubital": (2.0, 2.8), "glossa": (5.8, 6.3)},
-    "sahariensis":  {"aile": (9.0, 9.5), "cubital": (1.9, 2.5), "glossa": (6.0, 6.5)},
-    "ligustica":    {"aile": (9.2, 9.8), "cubital": (2.5, 3.2), "glossa": (6.3, 6.8)},
-    "carnica":      {"aile": (9.3, 9.9), "cubital": (2.2, 3.0), "glossa": (6.4, 7.0)},
-    "hybride":      {"aile": (8.5, 9.5), "cubital": (1.8, 3.5), "glossa": (5.5, 6.8)},
-}
-
-def classify_race(aile, cubital, glossa):
-    scores = {}
-    for race, ref in RUTTNER_REF.items():
-        s = 0
-        for val, (lo, hi) in [(aile, ref["aile"]), (cubital, ref["cubital"]), (glossa, ref["glossa"])]:
-            if val is None:
-                s += 0.5
-            elif lo <= val <= hi:
-                s += 1.0
-            else:
-                dist = min(abs(val - lo), abs(val - hi))
-                s += max(0, 1.0 - dist * 0.5)
-        scores[race] = s
-    total = sum(scores.values()) or 1
-    return {r: round(v / total * 100) for r, v in scores.items()}
-
-
-def page_morpho():
-    st.markdown("## 🧬 Morphométrie IA — Classification raciale")
-    st.markdown("<p style='color:#A8B4CC'>Mesures morphométriques + analyse IA multi-fournisseurs (Ruttner 1988)</p>",
-                unsafe_allow_html=True)
-
-    ia_active = widget_cle_api()
-
-    conn = get_db()
-    ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
-    opts = {r[1]: r[0] for r in ruches}
-
-    specialisations = {
-        "intermissa": ["Production de miel", "Propolis abondante", "Résistance chaleur", "Adaptation locale"],
-        "sahariensis": ["Butinage intense", "Résistance extrême chaleur", "Économie eau"],
-        "ligustica": ["Production intensive miel", "Faible propolis", "Docilité"],
-        "carnica": ["Économie hivernale", "Butinage précoce", "Faible essaimage"],
-        "hybride": ["Variable selon parentaux", "Évaluation approfondie requise"],
-    }
-
-    tab1, tab2 = st.tabs(["🔬 Analyse + IA", "📜 Historique"])
-
-    with tab1:
-        col1, col2 = st.columns([1, 1.2])
-
-        with col1:
-            st.markdown("### 📐 Mesures morphométriques")
-            ruche_sel = st.selectbox("Ruche analysée", opts.keys())
-            aile    = st.number_input("Longueur aile antérieure (mm)", 7.0, 12.0, 9.2, 0.1)
-            largeur = st.number_input("Largeur aile (mm)", 2.0, 5.0, 3.1, 0.1)
-            cubital = st.number_input("Indice cubital", 1.0, 5.0, 2.3, 0.1,
-                                      help="Rapport distances nervures cubitales a/b ÷ b/c")
-            glossa  = st.number_input("Longueur glossa (mm)", 4.0, 8.0, 6.1, 0.1)
-            tomentum    = st.slider("Tomentum (densité poils thorax 0–3)", 0, 3, 2)
-            pigmentation = st.selectbox("Pigmentation scutellum",
-                                        ["Noir", "Brun foncé", "Brun clair", "Jaune"])
-            notes = st.text_area("Notes / Observations")
-
-            st.markdown("### 📷 Photo macro (optionnel)")
-            st.markdown("<small style='color:#A8B4CC'>Photo macro de l'aile ou de l'abeille (si le fournisseur IA supporte la vision)</small>",
-                        unsafe_allow_html=True)
-            img_file = st.file_uploader("Photo macro abeille", type=["jpg","jpeg","png","webp"],
-                                        key="morpho_img")
-
-            col_btn1, col_btn2 = st.columns(2)
-            btn_local  = col_btn1.button("🔬 Classifier (local)", use_container_width=True)
-            btn_ia     = col_btn2.button("🤖 Analyser avec l'IA", use_container_width=True,
-                                          disabled=not ia_active)
-
-        with col2:
-            st.markdown("### 📊 Résultats — Classification Ruttner 1988")
-            scores     = classify_race(aile, cubital, glossa)
-            race_prob  = max(scores, key=scores.get)
-            confiance  = scores[race_prob]
-
-            st.markdown(f"""
-            <div style='background:#0F1117;border:1px solid #C8820A;border-left:4px solid #C8820A;
-                        border-radius:8px;padding:12px 16px;margin-bottom:12px'>
-                <div style='font-size:.95rem;font-weight:600;color:#F0F4FF'>
-                    Race probable : <span style='color:#F5A623'>Apis mellifera {race_prob}</span>
-                </div>
-                <div style='font-size:.78rem;color:#A8B4CC;margin-top:3px'>
-                    Algorithme local · Confiance {confiance}% ·
-                    aile={aile}mm / cubital={cubital} / glossa={glossa}mm
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            couleurs = {"intermissa":"#C8820A","sahariensis":"#8B7355",
-                        "ligustica":"#2E7D32","carnica":"#1565C0","hybride":"#888"}
-            fig = go.Figure()
-            for race, pct in sorted(scores.items(), key=lambda x: -x[1]):
-                fig.add_trace(go.Bar(y=[race], x=[pct], orientation="h",
-                                     marker_color=couleurs.get(race,"#ccc"),
-                                     text=f"{pct}%", textposition="auto", name=race))
-            fig.update_layout(height=220, showlegend=False, template="plotly_white",
-                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                              margin=dict(t=0,b=0,l=0,r=10),
-                              xaxis=dict(range=[0,100], title="Confiance (%)"))
-            st.plotly_chart(fig, use_container_width=True)
-
-            prod_scores = {
-                "intermissa":   {"miel":4,"pollen":3,"propolis":5,"gr":2},
-                "sahariensis":  {"miel":3,"pollen":4,"propolis":3,"gr":2},
-                "ligustica":    {"miel":5,"pollen":3,"propolis":1,"gr":3},
-                "carnica":      {"miel":4,"pollen":4,"propolis":2,"gr":3},
-                "hybride":      {"miel":3,"pollen":3,"propolis":3,"gr":2},
-            }
-            ps = prod_scores.get(race_prob, {"miel":3,"pollen":3,"propolis":3,"gr":2})
-            st.markdown("**Potentiel de production estimé (algorithme local) :**")
-            cols_s = st.columns(4)
-            for col, (label, icon, key) in zip(cols_s, [
-                ("Miel","🍯","miel"), ("Pollen","🌼","pollen"),
-                ("Propolis","🟤","propolis"), ("Gelée R.","👑","gr")
-            ]):
-                note = ps[key]
-                etoiles = "⭐" * note + "☆" * (5 - note)
-                col.markdown(f"<div style='text-align:center;font-size:.75rem;color:#A8B4CC'>{icon} {label}</div>"
-                             f"<div style='text-align:center;font-size:.85rem'>{etoiles}</div>",
-                             unsafe_allow_html=True)
-
-        if btn_local:
-            rid = opts[ruche_sel]
-            conf_json = json.dumps([{"race": r, "confiance": p} for r, p in scores.items()])
-            spec = " / ".join(specialisations.get(race_prob, []))
-            conn.execute("""
-                INSERT INTO morph_analyses
-                (ruche_id,date_analyse,longueur_aile_mm,largeur_aile_mm,indice_cubital,
-                 glossa_mm,tomentum,pigmentation,race_probable,confiance_json,specialisation,notes)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (rid, str(datetime.date.today()), aile, largeur, cubital,
-                  glossa, tomentum, pigmentation, race_prob, conf_json, spec, notes))
-            conn.commit()
-            log_action("Morphométrie classifiée (local)", f"Ruche {ruche_sel} — {race_prob} {confiance}%")
-            result_json = {
-                "id_analyse": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "date": datetime.datetime.now().isoformat() + "Z",
-                "ruche": ruche_sel,
-                "morphometrie": {
-                    "mesures": {"longueur_aile_mm": aile, "largeur_aile_mm": largeur,
-                                "indice_cubital": cubital, "glossa_mm": glossa,
-                                "tomentum": tomentum, "pigmentation": pigmentation},
-                    "classification_raciale": [{"race": r, "confiance": p} for r, p in scores.items()],
-                    "race_probable": race_prob, "specialisation": spec,
-                }
-            }
-            st.success(f"✅ Classification locale sauvegardée : **{race_prob}** ({confiance}%)")
-            st.download_button("⬇️ Télécharger JSON", json.dumps(result_json, indent=2, ensure_ascii=False),
-                               f"morpho_{datetime.date.today()}.json", "application/json")
-
-        if btn_ia:
-            img_bytes = img_file.read() if img_file else None
-            prov = get_active_provider()
-            with st.spinner(f"🤖 {prov} analyse les données morphométriques..."):
-                resultat_ia = ia_analyser_morphometrie(
-                    aile, largeur, cubital, glossa, tomentum, pigmentation,
-                    race_prob, confiance, img_bytes
-                )
-            if resultat_ia and not resultat_ia.startswith("❌"):
-                afficher_resultat_ia(resultat_ia, "Analyse morphométrique approfondie — IA")
-                log_action("Morphométrie IA", f"Ruche {ruche_sel} — analyse {prov} effectuée")
-                rid = opts[ruche_sel]
-                conf_json = json.dumps([{"race": r, "confiance": p} for r, p in scores.items()])
-                spec = " / ".join(specialisations.get(race_prob, []))
-                conn.execute("""
-                    INSERT INTO morph_analyses
-                    (ruche_id,date_analyse,longueur_aile_mm,largeur_aile_mm,indice_cubital,
-                     glossa_mm,tomentum,pigmentation,race_probable,confiance_json,specialisation,notes)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """, (rid, str(datetime.date.today()), aile, largeur, cubital,
-                      glossa, tomentum, pigmentation, race_prob, conf_json, spec,
-                      f"[IA] {notes}"))
-                conn.commit()
-            elif resultat_ia:
-                st.error(resultat_ia)
-            else:
-                st.warning("⚠️ IA non disponible. Configurez votre clé API via le sélecteur ci-dessus.")
-
-    with tab2:
-        df = pd.read_sql("""
-            SELECT m.id, r.nom as ruche, m.date_analyse, m.longueur_aile_mm,
-                   m.indice_cubital, m.glossa_mm, m.race_probable, m.specialisation, m.notes
-            FROM morph_analyses m JOIN ruches r ON r.id=m.ruche_id
-            ORDER BY m.date_analyse DESC
-        """, conn)
-        if not df.empty:
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Exporter CSV", csv, "morphometrie.csv", "text/csv")
-        else:
-            st.info("Aucune analyse morphométrique enregistrée.")
-
-    conn.close()
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE : CARTOGRAPHIE
-# ════════════════════════════════════════════════════════════════════════════
-def page_carto():
-    st.markdown("## 🗺️ Cartographie — Zones mellifères + Analyse IA")
-
-    ia_active = widget_cle_api()
-
-    conn = get_db()
-    tab1, tab2, tab3 = st.tabs(["🗺️ Carte & Zones", "🌿 Analyse environnement IA", "➕ Ajouter une zone"])
-
-    with tab1:
-        df_zones  = pd.read_sql("SELECT * FROM zones", conn)
-        df_ruches = pd.read_sql("SELECT * FROM ruches WHERE statut='actif' AND latitude IS NOT NULL", conn)
-
-        if FOLIUM_OK:
-            center_lat = float(df_ruches["latitude"].mean()) if not df_ruches.empty else 34.88
-            center_lon = float(df_ruches["longitude"].mean()) if not df_ruches.empty else 1.32
-            m = folium.Map(location=[center_lat, center_lon], zoom_start=13,
-                           tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
-                           attr="Google Satellite")
-            couleurs_pot = {"élevé":"green","modéré":"orange","faible":"red",
-                            "exceptionnel":"darkgreen","modere":"orange"}
-
-            for _, r in df_ruches.iterrows():
-                folium.Marker(
-                    [r["latitude"], r["longitude"]],
-                    popup=f"<b>{r['nom']}</b><br>{r['race']}<br>{r['localisation']}",
-                    icon=folium.Icon(color="orange", icon="home", prefix="fa")
-                ).add_to(m)
-
-            for _, z in df_zones.iterrows():
-                if z["latitude"] and z["longitude"]:
-                    col_m = couleurs_pot.get(str(z["potentiel"]).lower(), "blue")
-                    popup_html = f"""
-                    <b>{z['nom']}</b><br>
-                    Flore : {z['flore_principale']}<br>
-                    NDVI : {z['ndvi']}<br>
-                    Potentiel : {z['potentiel']}<br>
-                    Surface : {z['superficie_ha']} ha
-                    """
-                    folium.CircleMarker(
-                        [z["latitude"], z["longitude"]], radius=14,
-                        popup=folium.Popup(popup_html, max_width=200),
-                        color=col_m, fill=True, fill_color=col_m, fill_opacity=0.55
-                    ).add_to(m)
-
-            st_folium(m, width="100%", height=420)
-        else:
-            st.warning("Installez `folium` et `streamlit-folium` pour la carte interactive.")
-
-        st.markdown("### 📋 Zones enregistrées")
-        if not df_zones.empty:
-            for _, z in df_zones.iterrows():
-                with st.expander(f"📍 {z['nom']} — {z['flore_principale']} · {z['potentiel']}"):
-                    col_z1, col_z2, col_z3, col_z4 = st.columns(4)
-                    col_z1.metric("Surface", f"{z['superficie_ha']} ha")
-                    col_z2.metric("NDVI", f"{z['ndvi']:.2f}")
-                    col_z3.metric("Type", z["type_zone"])
-                    col_z4.metric("Potentiel", z["potentiel"])
-
-                    if st.button(f"🤖 Analyser '{z['nom']}' avec l'IA",
-                                  key=f"ia_zone_{z['id']}", disabled=not ia_active):
-                        prov = get_active_provider()
-                        with st.spinner(f"🤖 {prov} analyse la zone..."):
-                            result = ia_analyser_zone_carto(
-                                z["nom"], z["flore_principale"],
-                                z["superficie_ha"], z["ndvi"],
-                                z["potentiel"], z["type_zone"],
-                                z["latitude"], z["longitude"]
-                            )
-                        if result and "error" not in result:
-                            _afficher_diagnostic_zone(result, z["nom"])
-                            log_action("Analyse IA zone", f"Zone '{z['nom']}' analysée par {prov}")
-                        elif result:
-                            st.error(f"Erreur IA : {result.get('error')}")
-                        else:
-                            st.warning("⚠️ Configurez votre clé API via le sélecteur ci-dessus.")
-
-    with tab2:
-        st.markdown("### 🌿 Analyse IA d'un environnement mellifère")
-        st.markdown("""
-        <div style='background:#0D2A1F;border:1px solid #1A5C3A;border-radius:8px;padding:12px;
-                    font-size:.83rem;color:#F0F4FF;margin-bottom:16px'>
-        📸 Décrivez votre environnement (ou téléversez une photo) et l'IA évalue
-        le potentiel <b>Miel / Pollen / Propolis / Gelée royale</b> sur une échelle /5 ⭐<br>
-        ✅ Fonctionne avec <b>Gemini, Claude, Groq, Mistral, OpenRouter</b> et tous les fournisseurs configurés.
-        </div>
-        """, unsafe_allow_html=True)
-
-        col_env1, col_env2 = st.columns([1.2, 1])
-        with col_env1:
-            description = st.text_area(
-                "Description de l'environnement *",
-                placeholder=(
-                    "Ex : Zone de garrigue méditerranéenne avec chênes-lièges dominants, "
-                    "romarin, lavande stoechas, thym et jujubiers en bordure. "
-                    "Exposition sud, altitude 600m, oued permanent à 300m, "
-                    "pas de cultures agricoles à proximité..."
-                ),
-                height=140,
-                key="env_description"
-            )
-            col_s1, col_s2 = st.columns(2)
-            saison = col_s1.selectbox("Saison actuelle",
-                                       ["Printemps","Été","Automne","Hiver"], key="env_saison")
-            col_lat, col_lon = st.columns(2)
-            env_lat = col_lat.number_input("Latitude (optionnel)", -90.0, 90.0, 34.88, 0.0001,
-                                            format="%.4f", key="env_lat")
-            env_lon = col_lon.number_input("Longitude (optionnel)", -180.0, 180.0, 1.32, 0.0001,
-                                            format="%.4f", key="env_lon")
-
-        with col_env2:
-            st.markdown("**📷 Photo du paysage / de la flore (optionnel)**")
-            env_img = st.file_uploader("Photo paysage ou flore", type=["jpg","jpeg","png","webp"],
-                                        key="env_img")
-            if env_img:
-                st.image(env_img, caption="Aperçu de l'environnement", use_container_width=True)
-
-        prov_actif = get_active_provider()
-        btn_env = st.button(f"🤖 Lancer l'analyse avec {prov_actif.split('(')[0].strip()}",
-                             use_container_width=True, disabled=not ia_active)
-
-        if not ia_active:
-            st.info("🔑 Configurez votre clé API (sélecteur ci-dessus) pour activer l'analyse IA.")
-
-        if btn_env:
-            if not description.strip():
-                st.warning("⚠️ Veuillez décrire l'environnement.")
-            else:
-                img_bytes = env_img.read() if env_img else None
-                with st.spinner(f"🤖 {prov_actif} analyse l'environnement mellifère... (5-15 secondes)"):
-                    resultat = ia_analyser_environnement(
-                        description, env_lat, env_lon, saison, img_bytes
-                    )
-                if resultat and not resultat.startswith("❌"):
-                    afficher_resultat_ia(resultat, "Analyse environnementale mellifère — IA")
-                    log_action("Analyse IA environnement",
-                               f"Zone {env_lat:.2f},{env_lon:.2f} — {saison} — {prov_actif}")
-
-                    st.markdown("---")
-                    st.markdown("**💾 Sauvegarder cette zone dans la cartographie ?**")
-                    with st.form("save_env_zone"):
-                        nom_z = st.text_input("Nom de la zone", "Zone analysée IA")
-                        type_z = st.selectbox("Type", ["nectar","pollen","nectar+pollen","propolis","mixte"])
-                        surf_z = st.number_input("Superficie estimée (ha)", 0.0, 5000.0, 10.0)
-                        if st.form_submit_button("💾 Sauvegarder dans la cartographie"):
-                            conn.execute("""
-                                INSERT INTO zones (nom,type_zone,latitude,longitude,superficie_ha,
-                                                   flore_principale,potentiel,notes)
-                                VALUES (?,?,?,?,?,?,?,?)
-                            """, (nom_z, type_z, env_lat, env_lon, surf_z,
-                                  description[:100], "élevé", "[IA] " + description[:200]))
-                            conn.commit()
-                            log_action("Zone sauvegardée depuis analyse IA", nom_z)
-                            st.success(f"✅ Zone '{nom_z}' sauvegardée dans la cartographie !")
-                elif resultat:
-                    st.error(resultat)
-
-    with tab3:
-        with st.form("add_zone"):
-            col1, col2 = st.columns(2)
-            nom       = col1.text_input("Nom de la zone*")
-            type_zone = col2.selectbox("Type", ["nectar","pollen","nectar+pollen","propolis","mixte"])
-            col3, col4 = st.columns(2)
-            lat       = col3.number_input("Latitude", value=34.88, format="%.4f")
-            lon       = col4.number_input("Longitude", value=1.32, format="%.4f")
-            col5, col6, col7 = st.columns(3)
-            superficie = col5.number_input("Superficie (ha)", 0.0, 5000.0, 10.0)
-            flore      = col6.text_input("Flore principale")
-            ndvi       = col7.number_input("NDVI", 0.0, 1.0, 0.65, 0.01)
-            potentiel  = st.selectbox("Potentiel mellifère", ["faible","modéré","élevé","exceptionnel"])
-            notes      = st.text_area("Notes")
-            submitted  = st.form_submit_button("✅ Ajouter la zone")
-
-        if submitted and nom:
-            conn.execute("""
-                INSERT INTO zones (nom,type_zone,latitude,longitude,superficie_ha,
-                                   flore_principale,ndvi,potentiel,notes)
-                VALUES (?,?,?,?,?,?,?,?,?)
-            """, (nom, type_zone, lat, lon, superficie, flore, ndvi, potentiel, notes))
-            conn.commit()
-            log_action("Zone ajoutée", f"Zone '{nom}' — {flore} — NDVI {ndvi}")
-            st.success(f"✅ Zone '{nom}' ajoutée.")
-            st.rerun()
-
-    conn.close()
-
-
-def _afficher_diagnostic_zone(result, nom_zone):
-    d = result.get("diagnostic", {})
-    scores = result.get("scores", {})
-
-    st.markdown(f"""
-    <div style='background:linear-gradient(135deg,#F0F9F0,#1E2535);
-                border:1px solid #2E7D32;border-left:4px solid #2E7D32;
-                border-radius:10px;padding:16px;margin:8px 0'>
-        <div style='font-family:Playfair Display,serif;font-size:.95rem;font-weight:600;
-                    color:#6EE7B7;margin-bottom:10px'>🤖 Diagnostic IA — {nom_zone}</div>
-        <div style='display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px'>
-            <span>🌿 Potentiel : <b>{d.get('potentiel_global','—')}</b></span>
-            <span>📊 Indice mellifère : <b>{d.get('indice_mellifere','—')}/10</b></span>
-            <span>🐝 Capacité : <b>{d.get('capacite_ruches','—')} ruches</b></span>
-            <span>📅 Pic : <b>{d.get('saison_pic','—')}</b></span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    if scores:
-        st.markdown("**Scores de production :**")
-        cols_sc = st.columns(4)
-        icons = {"miel":"🍯","pollen":"🌼","propolis":"🟤","gelee_royale":"👑"}
-        labels = {"miel":"Miel","pollen":"Pollen","propolis":"Propolis","gelee_royale":"Gelée royale"}
-        for col, key in zip(cols_sc, ["miel","pollen","propolis","gelee_royale"]):
-            s = scores.get(key, {})
-            with col:
-                st.markdown(f"""
-                <div style='text-align:center;background:#1E2535;border:1px solid #2E3A52;
-                            border-radius:8px;padding:10px'>
-                    <div style='font-size:1.2rem'>{icons[key]}</div>
-                    <div style='font-size:.75rem;color:#A8B4CC;font-weight:500'>{labels[key]}</div>
-                    <div style='font-size:.9rem'>{s.get('etoiles','—')}</div>
-                    <div style='font-size:.7rem;color:#A8B4CC'>{s.get('detail','')[:50]}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-    flore_list = result.get("flore_identifiee", [])
-    if flore_list:
-        st.markdown("**Flore identifiée par l'IA :**")
-        df_f = pd.DataFrame(flore_list)
-        st.dataframe(df_f, use_container_width=True, hide_index=True)
-
-    recs = result.get("recommandations", [])
-    if recs:
-        st.markdown("**Recommandations :**")
-        for r in recs:
-            st.markdown(f"- {r}")
-
-    resume = result.get("resume", "")
-    if resume:
-        st.info(f"📝 {resume}")
-
-
-# ════════════════════════════════════════════════════════════════════════════
 # PAGE : MÉTÉO & MIELLÉE
 # ════════════════════════════════════════════════════════════════════════════
 def page_meteo():
@@ -2431,14 +1979,14 @@ def page_admin():
         df_stats = pd.DataFrame({"Table": stats.keys(), "Enregistrements": stats.values()})
         st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
-        version = get_setting("version", "3.0.0")
+        version = get_setting("version", "3.1.0")
         st.markdown(f"<div class='api-footer'>ApiTrack Pro v{version} · Streamlit · SQLite · © 2025</div>", unsafe_allow_html=True)
 
     conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# NOUVELLE PAGE : INSPECTION VOCALE (MAINS LIBRES)
+# NOUVELLE PAGE : INSPECTION VOCALE
 # ════════════════════════════════════════════════════════════════════════════
 def page_voice_inspection():
     st.markdown("## 🎤 Assistant Vocal d'Inspection")
@@ -2681,7 +2229,7 @@ def page_pedigree():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# NOUVELLE PAGE : BOURSE AUX MÂLES (COLLABORATIF ANONYMISÉ)
+# NOUVELLE PAGE : BOURSE AUX MÂLES
 # ════════════════════════════════════════════════════════════════════════════
 def page_male_market():
     st.markdown("## 🤝 Bourse aux Mâles - Réseau Collaboratif")
@@ -2758,7 +2306,7 @@ def page_male_market():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# NOUVELLE PAGE : SCANNER VISUEL DE CADRE (DÉTECTION MALADIES)
+# NOUVELLE PAGE : SCANNER VISUEL DE CADRE
 # ════════════════════════════════════════════════════════════════════════════
 def page_cadre_scanner():
     st.markdown("## 📸 Scanner de Cadre - Détection IA de Maladies")
@@ -2796,7 +2344,7 @@ def page_cadre_scanner():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# NOUVELLE PAGE : PRÉDICTION DE TRANSHUMANCE (NDVI + MÉTÉO)
+# NOUVELLE PAGE : PRÉDICTION DE TRANSHUMANCE
 # ════════════════════════════════════════════════════════════════════════════
 def page_transhumance():
     st.markdown("## 🚚 Prédiction de Transhumance")
@@ -2851,7 +2399,586 @@ def page_transhumance():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# ROUTEUR PRINCIPAL (AJOUT DES NOUVELLES ROUTES)
+# PAGE : CARTOGRAPHIE (avec analyse photo de l'environnement)
+# ════════════════════════════════════════════════════════════════════════════
+def page_carto():
+    st.markdown("## 🗺️ Cartographie — Zones mellifères + Analyse IA")
+
+    ia_active = widget_cle_api()
+
+    conn = get_db()
+    tab1, tab2, tab3 = st.tabs(["🗺️ Carte & Zones", "🌿 Analyse environnement IA", "➕ Ajouter une zone"])
+
+    with tab1:
+        df_zones  = pd.read_sql("SELECT * FROM zones", conn)
+        df_ruches = pd.read_sql("SELECT * FROM ruches WHERE statut='actif' AND latitude IS NOT NULL", conn)
+
+        if FOLIUM_OK:
+            center_lat = float(df_ruches["latitude"].mean()) if not df_ruches.empty else 34.88
+            center_lon = float(df_ruches["longitude"].mean()) if not df_ruches.empty else 1.32
+            m = folium.Map(location=[center_lat, center_lon], zoom_start=13,
+                           tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+                           attr="Google Satellite")
+            couleurs_pot = {"élevé":"green","modéré":"orange","faible":"red",
+                            "exceptionnel":"darkgreen","modere":"orange"}
+
+            for _, r in df_ruches.iterrows():
+                folium.Marker(
+                    [r["latitude"], r["longitude"]],
+                    popup=f"<b>{r['nom']}</b><br>{r['race']}<br>{r['localisation']}",
+                    icon=folium.Icon(color="orange", icon="home", prefix="fa")
+                ).add_to(m)
+
+            for _, z in df_zones.iterrows():
+                if z["latitude"] and z["longitude"]:
+                    col_m = couleurs_pot.get(str(z["potentiel"]).lower(), "blue")
+                    popup_html = f"""
+                    <b>{z['nom']}</b><br>
+                    Flore : {z['flore_principale']}<br>
+                    NDVI : {z['ndvi']}<br>
+                    Potentiel : {z['potentiel']}<br>
+                    Surface : {z['superficie_ha']} ha
+                    """
+                    folium.CircleMarker(
+                        [z["latitude"], z["longitude"]], radius=14,
+                        popup=folium.Popup(popup_html, max_width=200),
+                        color=col_m, fill=True, fill_color=col_m, fill_opacity=0.55
+                    ).add_to(m)
+
+            st_folium(m, width="100%", height=420)
+        else:
+            st.warning("Installez `folium` et `streamlit-folium` pour la carte interactive.")
+
+        st.markdown("### 📋 Zones enregistrées")
+        if not df_zones.empty:
+            for _, z in df_zones.iterrows():
+                with st.expander(f"📍 {z['nom']} — {z['flore_principale']} · {z['potentiel']}"):
+                    col_z1, col_z2, col_z3, col_z4 = st.columns(4)
+                    col_z1.metric("Surface", f"{z['superficie_ha']} ha")
+                    col_z2.metric("NDVI", f"{z['ndvi']:.2f}")
+                    col_z3.metric("Type", z["type_zone"])
+                    col_z4.metric("Potentiel", z["potentiel"])
+
+                    if st.button(f"🤖 Analyser '{z['nom']}' avec l'IA",
+                                  key=f"ia_zone_{z['id']}", disabled=not ia_active):
+                        prov = get_active_provider()
+                        with st.spinner(f"🤖 {prov} analyse la zone..."):
+                            result = ia_analyser_zone_carto(
+                                z["nom"], z["flore_principale"],
+                                z["superficie_ha"], z["ndvi"],
+                                z["potentiel"], z["type_zone"],
+                                z["latitude"], z["longitude"]
+                            )
+                        if result and "error" not in result:
+                            _afficher_diagnostic_zone(result, z["nom"])
+                            log_action("Analyse IA zone", f"Zone '{z['nom']}' analysée par {prov}")
+                        elif result:
+                            st.error(f"Erreur IA : {result.get('error')}")
+                        else:
+                            st.warning("⚠️ Configurez votre clé API via le sélecteur ci-dessus.")
+
+    with tab2:
+        st.markdown("### 🌿 Analyse IA d'un environnement mellifère")
+        st.markdown("""
+        <div style='background:#0D2A1F;border:1px solid #1A5C3A;border-radius:8px;padding:12px;
+                    font-size:.83rem;color:#F0F4FF;margin-bottom:16px'>
+        📸 <b>Nouveau :</b> Prenez une photo du paysage ou décrivez-le. L'IA évalue le potentiel mellifère.
+        </div>
+        """, unsafe_allow_html=True)
+
+        mode_analyse = st.radio("Mode d'analyse", ["📝 Description textuelle", "📷 Analyse de photo"], horizontal=True)
+
+        if mode_analyse == "📝 Description textuelle":
+            col_env1, col_env2 = st.columns([1.2, 1])
+            with col_env1:
+                description = st.text_area(
+                    "Description de l'environnement *",
+                    placeholder="Ex : Zone de garrigue méditerranéenne avec chênes-lièges...",
+                    height=140,
+                    key="env_description"
+                )
+                col_s1, col_s2 = st.columns(2)
+                saison = col_s1.selectbox("Saison actuelle", ["Printemps","Été","Automne","Hiver"], key="env_saison")
+                col_lat, col_lon = st.columns(2)
+                env_lat = col_lat.number_input("Latitude (optionnel)", -90.0, 90.0, 34.88, 0.0001, format="%.4f", key="env_lat")
+                env_lon = col_lon.number_input("Longitude (optionnel)", -180.0, 180.0, 1.32, 0.0001, format="%.4f", key="env_lon")
+
+            with col_env2:
+                st.markdown("**📷 Photo du paysage (optionnel)**")
+                env_img = st.file_uploader("Photo paysage ou flore", type=["jpg","jpeg","png","webp"], key="env_img_text")
+                if env_img:
+                    st.image(env_img, caption="Aperçu", use_container_width=True)
+
+            prov_actif = get_active_provider()
+            btn_env = st.button(f"🤖 Lancer l'analyse avec {prov_actif.split('(')[0].strip()}",
+                                 use_container_width=True, disabled=not ia_active)
+
+            if btn_env:
+                if not description.strip():
+                    st.warning("⚠️ Veuillez décrire l'environnement.")
+                else:
+                    img_bytes = env_img.read() if env_img else None
+                    with st.spinner(f"🤖 {prov_actif} analyse l'environnement mellifère..."):
+                        resultat = ia_analyser_environnement(
+                            description, env_lat, env_lon, saison, img_bytes
+                        )
+                    if resultat and not resultat.startswith("❌"):
+                        afficher_resultat_ia(resultat, "Analyse environnementale mellifère — IA")
+                        log_action("Analyse IA environnement", f"Zone {env_lat:.2f},{env_lon:.2f} — {saison} — {prov_actif}")
+
+                        st.markdown("---")
+                        st.markdown("**💾 Sauvegarder cette zone dans la cartographie ?**")
+                        with st.form("save_env_zone"):
+                            nom_z = st.text_input("Nom de la zone", "Zone analysée IA")
+                            type_z = st.selectbox("Type", ["nectar","pollen","nectar+pollen","propolis","mixte"])
+                            surf_z = st.number_input("Superficie estimée (ha)", 0.0, 5000.0, 10.0)
+                            if st.form_submit_button("💾 Sauvegarder dans la cartographie"):
+                                conn.execute("""
+                                    INSERT INTO zones (nom,type_zone,latitude,longitude,superficie_ha,
+                                                       flore_principale,potentiel,notes)
+                                    VALUES (?,?,?,?,?,?,?,?)
+                                """, (nom_z, type_z, env_lat, env_lon, surf_z,
+                                      description[:100], "élevé", "[IA] " + description[:200]))
+                                conn.commit()
+                                log_action("Zone sauvegardée depuis analyse IA", nom_z)
+                                st.success(f"✅ Zone '{nom_z}' sauvegardée !")
+                    elif resultat:
+                        st.error(resultat)
+
+        else:
+            st.markdown("#### 📷 Analyse par photo uniquement")
+            st.info("Prenez une photo du paysage. L'IA analysera directement la végétation visible.")
+
+            col_photo1, col_photo2 = st.columns([1, 1])
+            with col_photo1:
+                env_img_only = st.file_uploader("Photo du paysage *", type=["jpg","jpeg","png","webp"], key="env_img_only")
+                if env_img_only:
+                    st.image(env_img_only, use_container_width=True)
+
+            with col_photo2:
+                st.markdown("**Coordonnées (optionnel)**")
+                lat_photo = st.number_input("Latitude", value=34.88, format="%.4f", key="lat_photo")
+                lon_photo = st.number_input("Longitude", value=1.32, format="%.4f", key="lon_photo")
+                saison_photo = st.selectbox("Saison", ["Printemps","Été","Automne","Hiver"], key="saison_photo")
+
+            if st.button("🤖 Analyser la photo", disabled=not ia_active, use_container_width=True):
+                if not env_img_only:
+                    st.warning("Veuillez téléverser une photo.")
+                else:
+                    img_bytes = env_img_only.getvalue()
+                    prompt_photo = f"""Tu es un expert en botanique méditerranéenne et apicole. Analyse cette photo de paysage.
+                    Localisation approximative : lat {lat_photo}, lon {lon_photo}. Saison : {saison_photo}.
+                    Identifie les espèces végétales visibles et évalue le potentiel mellifère (miel, pollen, propolis, gelée royale).
+                    Fournis une réponse structurée avec :
+                    1. Flore identifiée (liste)
+                    2. Potentiel global (Faible/Modéré/Élevé/Exceptionnel)
+                    3. Scores /5 pour Miel, Pollen, Propolis, Gelée royale
+                    4. Recommandations (nombre de ruches possible, période de miellée)
+                    Sois concis mais précis."""
+                    with st.spinner("L'IA examine la photo..."):
+                        resultat_photo = ia_call(prompt_photo, image_bytes=img_bytes)
+                    if resultat_photo and not resultat_photo.startswith("❌"):
+                        afficher_resultat_ia(resultat_photo, "Analyse de la photo — IA Vision")
+                        log_action("Analyse photo environnement", f"Lat {lat_photo}, Lon {lon_photo}")
+                        with st.form("save_photo_zone"):
+                            nom_z = st.text_input("Nom de la zone", "Zone photo IA")
+                            if st.form_submit_button("💾 Sauvegarder"):
+                                conn.execute("""
+                                    INSERT INTO zones (nom, latitude, longitude, potentiel, notes)
+                                    VALUES (?, ?, ?, ?, ?)
+                                """, (nom_z, lat_photo, lon_photo, "élevé", "Analyse photo IA"))
+                                conn.commit()
+                                st.success("Zone sauvegardée.")
+                    else:
+                        st.error(resultat_photo or "Erreur inconnue")
+
+    with tab3:
+        with st.form("add_zone"):
+            col1, col2 = st.columns(2)
+            nom       = col1.text_input("Nom de la zone*")
+            type_zone = col2.selectbox("Type", ["nectar","pollen","nectar+pollen","propolis","mixte"])
+            col3, col4 = st.columns(2)
+            lat       = col3.number_input("Latitude", value=34.88, format="%.4f")
+            lon       = col4.number_input("Longitude", value=1.32, format="%.4f")
+            col5, col6, col7 = st.columns(3)
+            superficie = col5.number_input("Superficie (ha)", 0.0, 5000.0, 10.0)
+            flore      = col6.text_input("Flore principale")
+            ndvi       = col7.number_input("NDVI", 0.0, 1.0, 0.65, 0.01)
+            potentiel  = st.selectbox("Potentiel mellifère", ["faible","modéré","élevé","exceptionnel"])
+            notes      = st.text_area("Notes")
+            submitted  = st.form_submit_button("✅ Ajouter la zone")
+
+        if submitted and nom:
+            conn.execute("""
+                INSERT INTO zones (nom,type_zone,latitude,longitude,superficie_ha,
+                                   flore_principale,ndvi,potentiel,notes)
+                VALUES (?,?,?,?,?,?,?,?,?)
+            """, (nom, type_zone, lat, lon, superficie, flore, ndvi, potentiel, notes))
+            conn.commit()
+            log_action("Zone ajoutée", f"Zone '{nom}' — {flore} — NDVI {ndvi}")
+            st.success(f"✅ Zone '{nom}' ajoutée.")
+            st.rerun()
+
+    conn.close()
+
+
+def _afficher_diagnostic_zone(result, nom_zone):
+    d = result.get("diagnostic", {})
+    scores = result.get("scores", {})
+
+    st.markdown(f"""
+    <div style='background:linear-gradient(135deg,#F0F9F0,#1E2535);
+                border:1px solid #2E7D32;border-left:4px solid #2E7D32;
+                border-radius:10px;padding:16px;margin:8px 0'>
+        <div style='font-family:Playfair Display,serif;font-size:.95rem;font-weight:600;
+                    color:#6EE7B7;margin-bottom:10px'>🤖 Diagnostic IA — {nom_zone}</div>
+        <div style='display:flex;gap:20px;flex-wrap:wrap;margin-bottom:10px'>
+            <span>🌿 Potentiel : <b>{d.get('potentiel_global','—')}</b></span>
+            <span>📊 Indice mellifère : <b>{d.get('indice_mellifere','—')}/10</b></span>
+            <span>🐝 Capacité : <b>{d.get('capacite_ruches','—')} ruches</b></span>
+            <span>📅 Pic : <b>{d.get('saison_pic','—')}</b></span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if scores:
+        st.markdown("**Scores de production :**")
+        cols_sc = st.columns(4)
+        icons = {"miel":"🍯","pollen":"🌼","propolis":"🟤","gelee_royale":"👑"}
+        labels = {"miel":"Miel","pollen":"Pollen","propolis":"Propolis","gelee_royale":"Gelée royale"}
+        for col, key in zip(cols_sc, ["miel","pollen","propolis","gelee_royale"]):
+            s = scores.get(key, {})
+            with col:
+                st.markdown(f"""
+                <div style='text-align:center;background:#1E2535;border:1px solid #2E3A52;
+                            border-radius:8px;padding:10px'>
+                    <div style='font-size:1.2rem'>{icons[key]}</div>
+                    <div style='font-size:.75rem;color:#A8B4CC;font-weight:500'>{labels[key]}</div>
+                    <div style='font-size:.9rem'>{s.get('etoiles','—')}</div>
+                    <div style='font-size:.7rem;color:#A8B4CC'>{s.get('detail','')[:50]}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    flore_list = result.get("flore_identifiee", [])
+    if flore_list:
+        st.markdown("**Flore identifiée par l'IA :**")
+        df_f = pd.DataFrame(flore_list)
+        st.dataframe(df_f, use_container_width=True, hide_index=True)
+
+    recs = result.get("recommandations", [])
+    if recs:
+        st.markdown("**Recommandations :**")
+        for r in recs:
+            st.markdown(f"- {r}")
+
+    resume = result.get("resume", "")
+    if resume:
+        st.info(f"📝 {resume}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PAGE : MORPHOMÉTRIE IA (avec photogrammétrie par étalon)
+# ════════════════════════════════════════════════════════════════════════════
+RUTTNER_REF = {
+    "intermissa":   {"aile": (8.9, 9.4), "cubital": (2.0, 2.8), "glossa": (5.8, 6.3)},
+    "sahariensis":  {"aile": (9.0, 9.5), "cubital": (1.9, 2.5), "glossa": (6.0, 6.5)},
+    "ligustica":    {"aile": (9.2, 9.8), "cubital": (2.5, 3.2), "glossa": (6.3, 6.8)},
+    "carnica":      {"aile": (9.3, 9.9), "cubital": (2.2, 3.0), "glossa": (6.4, 7.0)},
+    "hybride":      {"aile": (8.5, 9.5), "cubital": (1.8, 3.5), "glossa": (5.5, 6.8)},
+}
+
+def classify_race(aile, cubital, glossa):
+    scores = {}
+    for race, ref in RUTTNER_REF.items():
+        s = 0
+        for val, (lo, hi) in [(aile, ref["aile"]), (cubital, ref["cubital"]), (glossa, ref["glossa"])]:
+            if val is None:
+                s += 0.5
+            elif lo <= val <= hi:
+                s += 1.0
+            else:
+                dist = min(abs(val - lo), abs(val - hi))
+                s += max(0, 1.0 - dist * 0.5)
+        scores[race] = s
+    total = sum(scores.values()) or 1
+    return {r: round(v / total * 100) for r, v in scores.items()}
+
+
+def page_morpho():
+    st.markdown("## 🧬 Morphométrie IA — Classification raciale")
+    st.markdown("<p style='color:#A8B4CC'>Mesures morphométriques + analyse IA multi-fournisseurs (Ruttner 1988)</p>",
+                unsafe_allow_html=True)
+
+    ia_active = widget_cle_api()
+
+    conn = get_db()
+    ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
+    opts = {r[1]: r[0] for r in ruches}
+
+    specialisations = {
+        "intermissa": ["Production de miel", "Propolis abondante", "Résistance chaleur", "Adaptation locale"],
+        "sahariensis": ["Butinage intense", "Résistance extrême chaleur", "Économie eau"],
+        "ligustica": ["Production intensive miel", "Faible propolis", "Docilité"],
+        "carnica": ["Économie hivernale", "Butinage précoce", "Faible essaimage"],
+        "hybride": ["Variable selon parentaux", "Évaluation approfondie requise"],
+    }
+
+    tab1, tab2, tab3 = st.tabs(["📸 Photogrammétrie", "✏️ Saisie manuelle", "📜 Historique"])
+
+    with tab1:
+        st.markdown("### 📏 Mesure automatique par photo avec étalon")
+        st.info("Prenez une photo de l'aile avec une pièce de monnaie (ex: 10 DA, 1€, 1$) comme référence d'échelle. Cliquez sur les points pour mesurer.")
+
+        if not CANVAS_OK:
+            st.error("⚠️ Installez streamlit-drawable-canvas : `pip install streamlit-drawable-canvas`")
+        else:
+            col_img, col_params = st.columns([2, 1])
+            with col_img:
+                img_file = st.file_uploader("Photo de l'aile avec étalon", type=["jpg","jpeg","png"], key="morpho_photo")
+                if img_file:
+                    image = Image.open(img_file)
+                    max_width = 700
+                    if image.width > max_width:
+                        ratio = max_width / image.width
+                        new_height = int(image.height * ratio)
+                        image = image.resize((max_width, new_height))
+                    st.image(image, caption="Cliquez sur les points dans l'ordre", use_container_width=False)
+
+                    canvas_result = st_canvas(
+                        fill_color="rgba(255, 0, 0, 0.3)",
+                        stroke_width=2,
+                        stroke_color="#F5A623",
+                        background_image=image,
+                        update_streamlit=True,
+                        height=image.height,
+                        width=image.width,
+                        drawing_mode="point",
+                        point_display_radius=5,
+                        key="morpho_canvas",
+                    )
+
+            with col_params:
+                st.markdown("**Paramètres de l'étalon**")
+                etalon_type = st.selectbox("Type d'étalon", ["Pièce 10 DA (20 mm)", "Pièce 1€ (23.25 mm)", "Pièce 1$ (26.5 mm)", "Autre (mm)"])
+                if "Autre" in etalon_type:
+                    diametre_etalon_mm = st.number_input("Diamètre réel (mm)", 1.0, 100.0, 20.0, 0.1)
+                else:
+                    diametre_etalon_mm = {"Pièce 10 DA": 20.0, "Pièce 1€": 23.25, "Pièce 1$": 26.5}[etalon_type]
+                    st.markdown(f"Diamètre : **{diametre_etalon_mm} mm**")
+
+                st.markdown("**Instructions :**")
+                st.markdown("1. Cliquez sur **deux bords opposés de la pièce** pour définir l'échelle.")
+                st.markdown("2. Cliquez sur **la base de l'aile**.")
+                st.markdown("3. Cliquez sur **l'extrémité de l'aile**.")
+                st.markdown("4. Cliquez sur les **points de l'indice cubital** (A, B, C).")
+
+                ruche_sel = st.selectbox("Ruche analysée", opts.keys(), key="morpho_ruche_photo")
+                notes = st.text_area("Notes", key="morpho_notes_photo")
+
+            if img_file and canvas_result.json_data is not None:
+                objects = canvas_result.json_data["objects"]
+                points = [(obj["left"], obj["top"]) for obj in objects if obj["type"] == "point"]
+
+                if len(points) >= 2:
+                    if len(points) >= 2:
+                        dist_pixels_etalon = math.hypot(points[0][0] - points[1][0], points[0][1] - points[1][1])
+                        if dist_pixels_etalon > 0:
+                            pixels_par_mm = dist_pixels_etalon / diametre_etalon_mm
+                            st.success(f"Échelle : {pixels_par_mm:.2f} pixels/mm")
+                        else:
+                            pixels_par_mm = None
+                            st.warning("Les deux points de l'étalon sont confondus.")
+                    else:
+                        pixels_par_mm = None
+
+                    mesures = {}
+                    if len(points) >= 4 and pixels_par_mm:
+                        if len(points) >= 4:
+                            dist_aile_px = math.hypot(points[2][0] - points[3][0], points[2][1] - points[3][1])
+                            longueur_aile_mm = dist_aile_px / pixels_par_mm
+                            mesures["longueur_aile_mm"] = round(longueur_aile_mm, 2)
+
+                        if len(points) >= 6:
+                            A, B, C = points[4], points[5], points[6] if len(points) >= 7 else points[5]
+                            AB = math.hypot(A[0]-B[0], A[1]-B[1])
+                            BC = math.hypot(B[0]-C[0], B[1]-C[1]) if len(points) >= 7 else 1
+                            if BC > 0:
+                                indice_cubital = AB / BC
+                                mesures["indice_cubital"] = round(indice_cubital, 2)
+
+                    if mesures:
+                        st.markdown("**Mesures calculées :**")
+                        for k, v in mesures.items():
+                            st.write(f"- {k} : {v}")
+
+                    if st.button("🧬 Classifier et analyser (IA)", disabled=not ia_active, use_container_width=True):
+                        if not mesures:
+                            st.warning("Points insuffisants pour les mesures.")
+                        else:
+                            aile = mesures.get("longueur_aile_mm", 9.2)
+                            cubital = mesures.get("indice_cubital", 2.3)
+                            glossa = 6.1
+                            largeur = 3.1
+                            tomentum = 2
+                            pigmentation = "Noir"
+
+                            scores = classify_race(aile, cubital, glossa)
+                            race_prob = max(scores, key=scores.get)
+                            confiance = scores[race_prob]
+
+                            st.markdown(f"**Race probable (local) :** *Apis mellifera {race_prob}* ({confiance}%)")
+
+                            img_bytes = img_file.getvalue()
+                            with st.spinner("🤖 Analyse IA en cours..."):
+                                result_ia = ia_analyser_morphometrie(
+                                    aile, largeur, cubital, glossa, tomentum, pigmentation,
+                                    race_prob, confiance, img_bytes
+                                )
+                            if result_ia and not result_ia.startswith("❌"):
+                                afficher_resultat_ia(result_ia, "Analyse morphométrique approfondie")
+                                rid = opts[ruche_sel]
+                                conf_json = json.dumps([{"race": r, "confiance": p} for r, p in scores.items()])
+                                spec = " / ".join(specialisations.get(race_prob, []))
+                                conn.execute("""
+                                    INSERT INTO morph_analyses
+                                    (ruche_id, date_analyse, longueur_aile_mm, largeur_aile_mm, indice_cubital,
+                                     glossa_mm, tomentum, pigmentation, race_probable, confiance_json, specialisation, notes)
+                                    VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (rid, aile, largeur, cubital, glossa, tomentum, pigmentation, race_prob, conf_json, spec, notes))
+                                conn.commit()
+                                log_action("Morphométrie photo", f"Ruche {ruche_sel} - {race_prob}")
+                                st.success("Analyse sauvegardée.")
+                            else:
+                                st.error(result_ia or "Erreur IA")
+
+    with tab2:
+        col1, col2 = st.columns([1, 1.2])
+
+        with col1:
+            st.markdown("### 📐 Mesures morphométriques")
+            ruche_sel_man = st.selectbox("Ruche analysée", opts.keys(), key="morpho_ruche_man")
+            aile    = st.number_input("Longueur aile antérieure (mm)", 7.0, 12.0, 9.2, 0.1, key="aile_man")
+            largeur = st.number_input("Largeur aile (mm)", 2.0, 5.0, 3.1, 0.1, key="largeur_man")
+            cubital = st.number_input("Indice cubital", 1.0, 5.0, 2.3, 0.1, key="cubital_man")
+            glossa  = st.number_input("Longueur glossa (mm)", 4.0, 8.0, 6.1, 0.1, key="glossa_man")
+            tomentum    = st.slider("Tomentum (0–3)", 0, 3, 2, key="tomentum_man")
+            pigmentation = st.selectbox("Pigmentation scutellum", ["Noir", "Brun foncé", "Brun clair", "Jaune"], key="pigment_man")
+            notes_man = st.text_area("Notes", key="notes_man")
+            img_file_man = st.file_uploader("Photo macro (optionnel)", type=["jpg","jpeg","png"], key="morpho_img_man")
+
+            col_btn1, col_btn2 = st.columns(2)
+            btn_local  = col_btn1.button("🔬 Classifier (local)", use_container_width=True)
+            btn_ia     = col_btn2.button("🤖 Analyser avec l'IA", use_container_width=True, disabled=not ia_active)
+
+        with col2:
+            st.markdown("### 📊 Résultats — Classification Ruttner 1988")
+            scores     = classify_race(aile, cubital, glossa)
+            race_prob  = max(scores, key=scores.get)
+            confiance  = scores[race_prob]
+
+            st.markdown(f"""
+            <div style='background:#0F1117;border:1px solid #C8820A;border-left:4px solid #C8820A;
+                        border-radius:8px;padding:12px 16px;margin-bottom:12px'>
+                <div style='font-size:.95rem;font-weight:600;color:#F0F4FF'>
+                    Race probable : <span style='color:#F5A623'>Apis mellifera {race_prob}</span>
+                </div>
+                <div style='font-size:.78rem;color:#A8B4CC;margin-top:3px'>
+                    Algorithme local · Confiance {confiance}% ·
+                    aile={aile}mm / cubital={cubital} / glossa={glossa}mm
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            couleurs = {"intermissa":"#C8820A","sahariensis":"#8B7355",
+                        "ligustica":"#2E7D32","carnica":"#1565C0","hybride":"#888"}
+            fig = go.Figure()
+            for race, pct in sorted(scores.items(), key=lambda x: -x[1]):
+                fig.add_trace(go.Bar(y=[race], x=[pct], orientation="h",
+                                     marker_color=couleurs.get(race,"#ccc"),
+                                     text=f"{pct}%", textposition="auto", name=race))
+            fig.update_layout(height=220, showlegend=False, template="plotly_white",
+                              paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                              margin=dict(t=0,b=0,l=0,r=10),
+                              xaxis=dict(range=[0,100], title="Confiance (%)"))
+            st.plotly_chart(fig, use_container_width=True)
+
+            prod_scores = {
+                "intermissa":   {"miel":4,"pollen":3,"propolis":5,"gr":2},
+                "sahariensis":  {"miel":3,"pollen":4,"propolis":3,"gr":2},
+                "ligustica":    {"miel":5,"pollen":3,"propolis":1,"gr":3},
+                "carnica":      {"miel":4,"pollen":4,"propolis":2,"gr":3},
+                "hybride":      {"miel":3,"pollen":3,"propolis":3,"gr":2},
+            }
+            ps = prod_scores.get(race_prob, {"miel":3,"pollen":3,"propolis":3,"gr":2})
+            st.markdown("**Potentiel de production estimé :**")
+            cols_s = st.columns(4)
+            for col, (label, icon, key) in zip(cols_s, [
+                ("Miel","🍯","miel"), ("Pollen","🌼","pollen"),
+                ("Propolis","🟤","propolis"), ("Gelée R.","👑","gr")
+            ]):
+                note = ps[key]
+                etoiles = "⭐" * note + "☆" * (5 - note)
+                col.markdown(f"<div style='text-align:center;font-size:.75rem;color:#A8B4CC'>{icon} {label}</div>"
+                             f"<div style='text-align:center;font-size:.85rem'>{etoiles}</div>",
+                             unsafe_allow_html=True)
+
+        if btn_local:
+            rid = opts[ruche_sel_man]
+            conf_json = json.dumps([{"race": r, "confiance": p} for r, p in scores.items()])
+            spec = " / ".join(specialisations.get(race_prob, []))
+            conn.execute("""
+                INSERT INTO morph_analyses
+                (ruche_id,date_analyse,longueur_aile_mm,largeur_aile_mm,indice_cubital,
+                 glossa_mm,tomentum,pigmentation,race_probable,confiance_json,specialisation,notes)
+                VALUES (?,date('now'),?,?,?,?,?,?,?,?,?,?)
+            """, (rid, aile, largeur, cubital, glossa, tomentum, pigmentation, race_prob, conf_json, spec, notes_man))
+            conn.commit()
+            log_action("Morphométrie manuelle", f"Ruche {ruche_sel_man} — {race_prob}")
+            st.success(f"✅ Classification sauvegardée : **{race_prob}** ({confiance}%)")
+
+        if btn_ia:
+            img_bytes = img_file_man.read() if img_file_man else None
+            prov = get_active_provider()
+            with st.spinner(f"🤖 {prov} analyse..."):
+                resultat_ia = ia_analyser_morphometrie(
+                    aile, largeur, cubital, glossa, tomentum, pigmentation,
+                    race_prob, confiance, img_bytes
+                )
+            if resultat_ia and not resultat_ia.startswith("❌"):
+                afficher_resultat_ia(resultat_ia, "Analyse IA")
+                rid = opts[ruche_sel_man]
+                conf_json = json.dumps([{"race": r, "confiance": p} for r, p in scores.items()])
+                spec = " / ".join(specialisations.get(race_prob, []))
+                conn.execute("""
+                    INSERT INTO morph_analyses
+                    (ruche_id, date_analyse, longueur_aile_mm, largeur_aile_mm, indice_cubital,
+                     glossa_mm, tomentum, pigmentation, race_probable, confiance_json, specialisation, notes)
+                    VALUES (?, date('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (rid, aile, largeur, cubital, glossa, tomentum, pigmentation, race_prob, conf_json, spec, f"[IA] {notes_man}"))
+                conn.commit()
+                log_action("Morphométrie IA", f"Ruche {ruche_sel_man} - analyse {prov}")
+            elif resultat_ia:
+                st.error(resultat_ia)
+
+    with tab3:
+        df = pd.read_sql("""
+            SELECT m.id, r.nom as ruche, m.date_analyse, m.longueur_aile_mm,
+                   m.indice_cubital, m.glossa_mm, m.race_probable, m.specialisation, m.notes
+            FROM morph_analyses m JOIN ruches r ON r.id=m.ruche_id
+            ORDER BY m.date_analyse DESC
+        """, conn)
+        if not df.empty:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            csv = df.to_csv(index=False).encode("utf-8")
+            st.download_button("⬇️ Exporter CSV", csv, "morphometrie.csv", "text/csv")
+        else:
+            st.info("Aucune analyse enregistrée.")
+
+    conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ROUTEUR PRINCIPAL
 # ════════════════════════════════════════════════════════════════════════════
 def main():
     inject_css()
@@ -2892,7 +3019,7 @@ def main():
 
     st.markdown("""
     <div class='api-footer'>
-        🐝 ApiTrack Pro v3.0 · Streamlit + Python + SQLite · Rucher de l'Atlas · 2025
+        🐝 ApiTrack Pro v3.1 · Streamlit + Python + SQLite · Rucher de l'Atlas · 2025
     </div>
     """, unsafe_allow_html=True)
 
