@@ -1186,11 +1186,13 @@ def ia_call(prompt_text, image_bytes=None, json_mode=False):
 
 
 def ia_call_json(prompt_text, image_bytes=None):
-    """Appel IA avec retour JSON parsé."""
+    """Appel IA avec retour JSON parsé. Tolérant au texte avant/après."""
     result = ia_call(prompt_text, image_bytes, json_mode=True)
     if not result or result.startswith("❌"):
         return {"error": result or "Pas de réponse"}
     text = result.strip()
+    
+    # Nettoyer les balises markdown
     if "```" in text:
         parts = text.split("```")
         for p in parts:
@@ -1200,17 +1202,28 @@ def ia_call_json(prompt_text, image_bytes=None):
             elif p.strip().startswith("{"):
                 text = p.strip()
                 break
-    try:
-        return json.loads(text)
-    except Exception:
-        import re
-        m = re.search(r'\{.*\}', text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except Exception:
-                pass
-        return {"error": f"JSON invalide : {text[:200]}"}
+        else:
+            # Si aucun bloc JSON trouvé, prendre le dernier bloc
+            text = parts[-1].strip()
+    
+    # Chercher un objet JSON avec regex (supporte les objets imbriqués)
+    import re
+    match = re.search(r'(\{.*\})', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            pass
+    
+    # Essayer de trouver un tableau JSON
+    match = re.search(r'(\[.*\])', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            pass
+    
+    return {"error": f"JSON invalide : {text[:200]}"}
 
 
 # ════════════════════════════════════════════════════════════════════════════
