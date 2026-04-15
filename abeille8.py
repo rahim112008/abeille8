@@ -3205,7 +3205,7 @@ def page_transhumance():
     lon_cible = col_lon.number_input("Longitude cible", -180.0, 180.0, center[1], format="%.5f")
 
     if st.button("🔮 Prédire la transhumance (IA)", use_container_width=True, disabled=not ia_active):
-        # Optionnel : obtenir un nom de lieu via reverse geocoding
+        # Obtenir un nom de lieu via reverse geocoding
         lieu_nom = ""
         try:
             url = f"https://nominatim.openstreetmap.org/reverse?lat={lat_cible}&lon={lon_cible}&format=json"
@@ -3218,7 +3218,8 @@ def page_transhumance():
 
         with st.spinner("Analyse de la zone par l'IA..."):
             result = predire_transhumance_ia(lat_cible, lon_cible, lieu_nom)
-        if "error" not in result:
+        
+        if "error" not in result and isinstance(result, dict):
             st.success("✅ Prédiction générée")
             col_p1, col_p2, col_p3 = st.columns(3)
             col_p1.metric("Potentiel miel", result.get("potentiel_miel", "N/A").capitalize())
@@ -3236,7 +3237,7 @@ def page_transhumance():
             conn.commit()
             log_action("Prédiction transhumance", f"Ruche {ruche_sel} vers {lieu_nom}")
         else:
-            st.error(f"Erreur IA : {result.get('error')}")
+            st.error(f"Erreur IA : {result.get('error', 'Réponse invalide')}")
 
     # Historique des transhumances
     with st.expander("📋 Historique des transhumances planifiées"):
