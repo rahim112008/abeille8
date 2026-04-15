@@ -1621,61 +1621,145 @@ Règles :
     return ia_call_json(prompt, image_bytes)
 
 
-def predire_transhumance_ia(lat, lon, description_zone=""):
-    """Génère une recommandation de transhumance pour la zone donnée."""
-    prompt = f"""Tu es un expert en transhumance apicole méditerranéenne. 
-Coordonnées : {lat:.4f}, {lon:.4f}
-Description de la zone : {description_zone}
+def predire_transhumance_ia(lat, lon, description_zone="", periode_souhaitee="Printemps"):
+    """Génère une recommandation de transhumance très détaillée pour la zone et la période données."""
+    prompt = f"""Tu es un expert en transhumance apicole, botaniste et météorologue. 
+Analyse en profondeur la zone située aux coordonnées {lat:.4f}, {lon:.4f}.
+Nom du lieu approximatif : {description_zone}
+Période de transhumance souhaitée : {periode_souhaitee}
 
-Tu dois répondre UNIQUEMENT par un objet JSON valide, sans aucun texte avant ou après, sans balises markdown, sans explications. Le JSON doit respecter exactement cette structure :
+Tu dois répondre UNIQUEMENT par un objet JSON valide, sans aucun texte avant ou après, sans balises markdown. Le JSON doit contenir les champs suivants (respecte exactement les noms) :
+
 {{
-    "potentiel_miel": "excellent" ou "bon" ou "moyen" ou "faible",
-    "periode_optimale_depart": "mois recommandé pour installer les ruches",
+    "resume_zone": "Description courte de la zone (type de paysage, altitude, climat général)",
+    "potentiel_miel": "excellent" / "bon" / "moyen" / "faible",
+    "periode_optimale_depart": "mois recommandé pour installer les ruches (si différent de la période souhaitée, justifie)",
     "periode_optimale_retour": "mois recommandé pour quitter la zone",
     "duree_sejour_jours": nombre entier,
-    "risques": ["risque1", "risque2"],
-    "recommandation": "conseil court",
-    "flore_dominante": "espèce mellifère principale probable"
+    "flore_dominante": "espèce mellifère principale pour la période souhaitée",
+    "flore_detaillee": [
+        {{
+            "espece": "nom scientifique et commun",
+            "type": "nectar" / "pollen" / "nectar+pollen" / "miellat",
+            "abondance": "abondante" / "moyenne" / "rare",
+            "periode_floraison": "mois de floraison",
+            "potentiel_mellifere": "élevé" / "moyen" / "faible",
+            "fleurit_pendant_periode": true/false
+        }}
+    ],
+    "plantes_en_fleur_periode": ["liste des espèces qui fleurissent pendant la période souhaitée"],
+    "meteo_moyenne": {{
+        "temp_printemps_c": "XX-YY",
+        "temp_ete_c": "XX-YY",
+        "temp_automne_c": "XX-YY",
+        "pluie_annuelle_mm": nombre,
+        "ensoleillement_heures": nombre,
+        "vent_dominant": "direction et force"
+    }},
+    "meteo_pendant_periode": {{
+        "temperature_moyenne_c": "XX-YY",
+        "precipitations_mm": nombre,
+        "risque_gel": "oui/non",
+        "risque_secheresse": "oui/non"
+    }},
+    "risques": ["risque1", "risque2", "risque3"],
+    "recommandations": ["recommandation1", "recommandation2", "recommandation3"],
+    "ressources_eau": "disponibilité en eau pour les abeilles",
+    "acces_ruches": "facilité d'accès et de transport",
+    "concurrence_apicole": "estimation de la présence d'autres apiculteurs"
 }}
 
-Ne réponds que le JSON. Pas de texte supplémentaire."""
+Remplis avec des données réalistes pour l'Algérie / Afrique du Nord. Sois précis sur les espèces végétales locales. Indique pour chaque espèce si elle est pollinifère, nectarifère ou les deux, et surtout si elle fleurit pendant la période demandée ({periode_souhaitee})."""
     
     result = ia_call_json(prompt)
     
-    # Si l'IA a retourné une erreur ou un JSON invalide, on fournit un fallback
-    if "error" in result:
-        # Essayer d'extraire un JSON à partir du texte d'erreur
-        error_text = result.get("error", "")
-        import re
-        json_match = re.search(r'\{.*\}', error_text, re.DOTALL)
-        if json_match:
-            try:
-                fallback = json.loads(json_match.group())
-                if "potentiel_miel" in fallback:
-                    return fallback
-            except:
-                pass
-        # Fallback intelligent selon le type de zone
-        is_urban = any(keyword in description_zone.lower() for keyword in ["urban", "city", "centre", "rue", "boulevard"])
+    # Fallback intelligent si l'IA ne répond pas correctement
+    if "error" in result or not isinstance(result, dict):
+        is_urban = any(keyword in description_zone.lower() for keyword in ["urban", "city", "centre", "rue", "boulevard", "tlemcen", "oran", "alger"])
+        # Déterminer les plantes selon la période
+        if "printemps" in periode_souhaitee.lower():
+            plantes_periode = ["Romarin", "Thym", "Oranger", "Amandier", "Jujubier"]
+            meteo_periode = {"temperature_moyenne_c": "15-22", "precipitations_mm": 60, "risque_gel": "non", "risque_secheresse": "non"}
+        elif "ete" in periode_souhaitee.lower():
+            plantes_periode = ["Lavande", "Eucalyptus", "Tournesol", "Figuier"]
+            meteo_periode = {"temperature_moyenne_c": "25-35", "precipitations_mm": 10, "risque_gel": "non", "risque_secheresse": "oui"}
+        elif "automne" in periode_souhaitee.lower():
+            plantes_periode = ["Caroube", "Olivier", "Lierre"]
+            meteo_periode = {"temperature_moyenne_c": "18-28", "precipitations_mm": 40, "risque_gel": "non", "risque_secheresse": "non"}
+        else:  # hiver
+            plantes_periode = ["Romarin (hivernal)", "Eucalyptus (floraison hiver)", "Arbousier"]
+            meteo_periode = {"temperature_moyenne_c": "8-15", "precipitations_mm": 80, "risque_gel": "oui", "risque_secheresse": "non"}
+        
         if is_urban:
             return {
+                "resume_zone": "Zone urbaine ou périurbaine avec peu de flore naturelle.",
                 "potentiel_miel": "faible",
                 "periode_optimale_depart": "Avril",
                 "periode_optimale_retour": "Mai",
                 "duree_sejour_jours": 30,
-                "risques": ["Zone urbaine - peu de flore mellifère", "Pesticides", "Dérangements"],
-                "recommandation": "Déplacer les ruches vers une zone rurale avec flore naturelle",
-                "flore_dominante": "Jardins ornementaux"
+                "flore_dominante": "Jardins ornementaux",
+                "flore_detaillee": [
+                    {"espece": "Orangers (Citrus sinensis)", "type": "nectar+pollen", "abondance": "moyenne", "periode_floraison": "Mars-Avril", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": "printemps" in periode_souhaitee.lower()},
+                    {"espece": "Laurier-rose", "type": "pollen", "abondance": "abondante", "periode_floraison": "Juin-Septembre", "potentiel_mellifere": "faible", "fleurit_pendant_periode": "ete" in periode_souhaitee.lower()}
+                ],
+                "plantes_en_fleur_periode": plantes_periode if not is_urban else ["Quelques arbres ornementaux"],
+                "meteo_moyenne": {
+                    "temp_printemps_c": "15-25", "temp_ete_c": "22-35", "temp_automne_c": "15-28",
+                    "pluie_annuelle_mm": 400, "ensoleillement_heures": 2800, "vent_dominant": "Nord-Ouest modéré"
+                },
+                "meteo_pendant_periode": meteo_periode,
+                "risques": ["Pollution", "Pesticides", "Peu de ressources mellifères"],
+                "recommandations": ["Déplacer vers zone rurale", "Transhumer en avril"],
+                "ressources_eau": "Fontaines, bassins",
+                "acces_ruches": "Bon accès routier",
+                "concurrence_apicole": "Faible"
             }
         else:
+            # Flore naturelle selon période
+            flore_detail = []
+            if "printemps" in periode_souhaitee.lower():
+                flore_detail = [
+                    {"espece": "Romarin (Rosmarinus officinalis)", "type": "nectar+pollen", "abondance": "abondante", "periode_floraison": "Fév-Mai", "potentiel_mellifere": "élevé", "fleurit_pendant_periode": True},
+                    {"espece": "Thym (Thymus vulgaris)", "type": "nectar+pollen", "abondance": "abondante", "periode_floraison": "Avr-Juin", "potentiel_mellifere": "élevé", "fleurit_pendant_periode": True},
+                    {"espece": "Jujubier (Ziziphus lotus)", "type": "nectar", "abondance": "moyenne", "periode_floraison": "Avr-Juin", "potentiel_mellifere": "élevé", "fleurit_pendant_periode": True},
+                    {"espece": "Amandier", "type": "nectar+pollen", "abondance": "rare", "periode_floraison": "Fév-Mar", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                ]
+            elif "ete" in periode_souhaitee.lower():
+                flore_detail = [
+                    {"espece": "Lavande (Lavandula stoechas)", "type": "nectar+pollen", "abondance": "moyenne", "periode_floraison": "Mai-Juil", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                    {"espece": "Eucalyptus", "type": "nectar", "abondance": "moyenne", "periode_floraison": "Juin-Août", "potentiel_mellifere": "élevé", "fleurit_pendant_periode": True},
+                    {"espece": "Tournesol", "type": "pollen", "abondance": "rare", "periode_floraison": "Juil-Août", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                ]
+            elif "automne" in periode_souhaitee.lower():
+                flore_detail = [
+                    {"espece": "Caroube (Ceratonia siliqua)", "type": "nectar", "abondance": "moyenne", "periode_floraison": "Sep-Oct", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                    {"espece": "Olivier", "type": "pollen", "abondance": "abondante", "periode_floraison": "Mai-Juin", "potentiel_mellifere": "faible", "fleurit_pendant_periode": False},
+                    {"espece": "Lierre", "type": "nectar", "abondance": "moyenne", "periode_floraison": "Sep-Nov", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                ]
+            else:  # hiver
+                flore_detail = [
+                    {"espece": "Romarin (floraison hivernale)", "type": "nectar+pollen", "abondance": "moyenne", "periode_floraison": "Dec-Fév", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                    {"espece": "Eucalyptus (variétés hivernales)", "type": "nectar", "abondance": "moyenne", "periode_floraison": "Nov-Jan", "potentiel_mellifere": "moyen", "fleurit_pendant_periode": True},
+                ]
             return {
-                "potentiel_miel": "moyen",
+                "resume_zone": "Zone méditerranéenne naturelle avec garrigue et forêt claire.",
+                "potentiel_miel": "bon",
                 "periode_optimale_depart": "Mars",
                 "periode_optimale_retour": "Juin",
                 "duree_sejour_jours": 90,
-                "risques": ["Sécheresse", "Pesticides agricoles"],
-                "recommandation": "Surveiller les ressources en eau et la floraison",
-                "flore_dominante": "Flore méditerranéenne variée"
+                "flore_dominante": "Romarin, Thym",
+                "flore_detaillee": flore_detail,
+                "plantes_en_fleur_periode": [f["espece"] for f in flore_detail if f.get("fleurit_pendant_periode")],
+                "meteo_moyenne": {
+                    "temp_printemps_c": "12-22", "temp_ete_c": "20-35", "temp_automne_c": "15-28",
+                    "pluie_annuelle_mm": 500, "ensoleillement_heures": 3000, "vent_dominant": "Nord-Ouest"
+                },
+                "meteo_pendant_periode": meteo_periode,
+                "risques": ["Sécheresse", "Incendies", "Frelons"],
+                "recommandations": ["Placer près d'un point d'eau", "Surveiller la floraison"],
+                "ressources_eau": "Oueds temporaires",
+                "acces_ruches": "Chemins ruraux",
+                "concurrence_apicole": "Modérée"
             }
     return result
 
@@ -3167,21 +3251,34 @@ def page_scanner_cadre():
 # PAGE : PRÉDICTION DE TRANSHUMANCE
 # ════════════════════════════════════════════════════════════════════════════
 def page_transhumance():
-    st.markdown("## 🚚 Prédiction de Transhumance")
-    st.markdown("Choisissez une zone cible sur la carte (ou recherchez une ville) pour obtenir une recommandation de transhumance.")
+    st.markdown("## 🚚 Prédiction de Transhumance - Analyse complète de zone")
+    st.markdown("Obtenez une analyse détaillée : flore, météo, risques, recommandations pour une transhumance réussie.")
 
     ia_active = widget_cle_api()
     conn = get_db()
 
-    # Récupération des ruches pour associer la transhumance
+    # Récupération des ruches
     ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
     opts = {r[1]: r[0] for r in ruches}
     ruche_sel = st.selectbox("Ruche à transhumer", opts.keys())
 
-    # Carte Folium interactive avec recherche de ville
+    # Période souhaitée
+    st.markdown("#### 📅 Période de transhumance souhaitée")
+    periode_options = ["Printemps (Mars-Mai)", "Été (Juin-Août)", "Automne (Sep-Nov)", "Hiver (Déc-Fév)", "Personnalisée"]
+    periode_choisie = st.selectbox("Sélectionnez la période", periode_options, index=0)
+    
+    if periode_choisie == "Personnalisée":
+        col_p1, col_p2 = st.columns(2)
+        mois_debut = col_p1.selectbox("Mois de début", ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"], index=2)
+        mois_fin = col_p2.selectbox("Mois de fin", ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"], index=4)
+        periode_souhaitee = f"{mois_debut} - {mois_fin}"
+    else:
+        periode_souhaitee = periode_choisie
+
+    # Recherche de ville
     st.markdown("#### 🗺️ Zone cible")
     col_search1, col_search2 = st.columns([3,1])
-    ville = col_search1.text_input("Nom de la ville/région", placeholder="Ex: Bejaia, Khenchela, El Tarf...")
+    ville = col_search1.text_input("Nom de la ville/région", placeholder="Ex: Bejaia, Khenchela, El Tarf, Tlemcen...")
     if col_search2.button("📍 Centrer", use_container_width=True) and ville:
         lat, lon = geocode_ville(ville)
         if lat and lon:
@@ -3191,11 +3288,14 @@ def page_transhumance():
             st.error("Ville non trouvée")
 
     center = st.session_state.get("transhumance_center", (34.88, 1.32))
+    
+    # Carte satellite
     if FOLIUM_OK:
-        m = folium.Map(location=center, zoom_start=10, tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", attr="Google Satellite")
-        # Ajouter un marqueur cliquable pour sélectionner un point
+        m = folium.Map(location=center, zoom_start=12, 
+                       tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", 
+                       attr="Google Satellite")
         m.add_child(folium.LatLngPopup())
-        folium.Marker(location=center, popup="Zone cible actuelle", icon=folium.Icon(color="green")).add_to(m)
+        folium.Marker(location=center, popup="Zone cible", icon=folium.Icon(color="green")).add_to(m)
         st_folium(m, width="100%", height=400, key="transhumance_map")
     else:
         st.warning("Folium non installé.")
@@ -3204,8 +3304,9 @@ def page_transhumance():
     lat_cible = col_lat.number_input("Latitude cible", -90.0, 90.0, center[0], format="%.5f")
     lon_cible = col_lon.number_input("Longitude cible", -180.0, 180.0, center[1], format="%.5f")
 
-    if st.button("🔮 Prédire la transhumance (IA)", use_container_width=True, disabled=not ia_active):
-        # Obtenir un nom de lieu via reverse geocoding
+    # Bouton de prédiction
+    if st.button("🔮 Prédiction détaillée (IA)", use_container_width=True, disabled=not ia_active):
+        # Reverse geocoding
         lieu_nom = ""
         try:
             url = f"https://nominatim.openstreetmap.org/reverse?lat={lat_cible}&lon={lon_cible}&format=json"
@@ -3216,33 +3317,115 @@ def page_transhumance():
         except:
             lieu_nom = f"{lat_cible:.4f}, {lon_cible:.4f}"
 
-        with st.spinner("Analyse de la zone par l'IA..."):
-            result = predire_transhumance_ia(lat_cible, lon_cible, lieu_nom)
-        
-        if "error" not in result and isinstance(result, dict):
-            st.success("✅ Prédiction générée")
-            col_p1, col_p2, col_p3 = st.columns(3)
-            col_p1.metric("Potentiel miel", result.get("potentiel_miel", "N/A").capitalize())
-            col_p2.metric("Départ optimal", result.get("periode_optimale_depart", "N/A"))
-            col_p3.metric("Retour optimal", result.get("periode_optimale_retour", "N/A"))
-            st.info(f"🌿 Flore dominante : {result.get('flore_dominante', 'Inconnue')}")
-            st.warning(f"⚠️ Risques : {', '.join(result.get('risques', []))}")
-            st.success(f"💡 Recommandation : {result.get('recommandation', '')}")
+        with st.spinner(f"Analyse approfondie pour la période {periode_souhaitee}... (15-30 secondes)"):
+            result = predire_transhumance_ia(lat_cible, lon_cible, lieu_nom, periode_souhaitee)
 
-            # Sauvegarde de la prédiction
+        if "error" not in result and isinstance(result, dict):
+            st.balloons()
+            st.success(f"✅ Analyse générée pour la période {periode_souhaitee}")
+
+            # 1. Résumé
+            st.markdown("### 📍 Synthèse de la zone")
+            st.info(result.get("resume_zone", "Aucune description disponible"))
+
+            # 2. Potentiel
+            col1, col2, col3 = st.columns(3)
+            col1.metric("🌻 Potentiel miel", result.get("potentiel_miel", "N/A").capitalize())
+            col2.metric("📅 Départ optimal", result.get("periode_optimale_depart", "N/A"))
+            col3.metric("🔄 Retour optimal", result.get("periode_optimale_retour", "N/A"))
+            st.metric("⏱️ Durée de séjour conseillée", f"{result.get('duree_sejour_jours', 'N/A')} jours")
+
+            # 3. Plantes en fleur pendant la période souhaitée
+            st.markdown(f"### 🌸 Plantes en fleur pendant {periode_souhaitee}")
+            plantes_periode = result.get("plantes_en_fleur_periode", [])
+            if plantes_periode:
+                st.markdown(", ".join([f"**{p}**" for p in plantes_periode]))
+            else:
+                st.info("Aucune information spécifique pour cette période")
+
+            # 4. Flore détaillée
+            st.markdown("### 🌿 Flore mellifère détaillée")
+            flore_list = result.get("flore_detaillee", [])
+            if flore_list:
+                df_flore = pd.DataFrame(flore_list)
+                # Ajout d'icônes
+                df_flore["🌼 Type"] = df_flore["type"].apply(lambda x: "🍯 Nectar" if x=="nectar" else ("🌾 Pollen" if x=="pollen" else "🍯+🌾 Mixte" if "nectar+pollen" in x else "🍬 Miellat"))
+                df_flore["📊 Abondance"] = df_flore["abondance"]
+                df_flore["📅 Floraison"] = df_flore["periode_floraison"]
+                df_flore["⭐ Potentiel"] = df_flore["potentiel_mellifere"]
+                df_flore["🌸 Fleurit à la période"] = df_flore["fleurit_pendant_periode"].apply(lambda x: "✅ Oui" if x else "❌ Non")
+                st.dataframe(df_flore[["espece", "🌼 Type", "📊 Abondance", "📅 Floraison", "⭐ Potentiel", "🌸 Fleurit à la période"]], 
+                             use_container_width=True, hide_index=True)
+                st.markdown(f"**🌳 Flore dominante :** {result.get('flore_dominante', 'Non spécifiée')}")
+            else:
+                st.warning("Aucune donnée floristique détaillée")
+
+            # 5. Météo
+            meteo = result.get("meteo_moyenne", {})
+            if meteo:
+                st.markdown("### ☀️ Climat annuel")
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("🌡️ Printemps", meteo.get("temp_printemps_c", "N/A") + " °C")
+                col_m2.metric("☀️ Été", meteo.get("temp_ete_c", "N/A") + " °C")
+                col_m3.metric("🍂 Automne", meteo.get("temp_automne_c", "N/A") + " °C")
+                st.metric("💧 Pluviométrie annuelle", f"{meteo.get('pluie_annuelle_mm', 'N/A')} mm")
+                st.metric("☀️ Ensoleillement", f"{meteo.get('ensoleillement_heures', 'N/A')} h/an")
+                st.caption(f"🌬️ Vents dominants : {meteo.get('vent_dominant', 'N/A')}")
+
+            # Météo pendant la période
+            meteo_periode = result.get("meteo_pendant_periode", {})
+            if meteo_periode:
+                st.markdown(f"### 🌡️ Météo pendant {periode_souhaitee}")
+                col_p1, col_p2, col_p3 = st.columns(3)
+                col_p1.metric("Température moyenne", meteo_periode.get("temperature_moyenne_c", "N/A") + " °C")
+                col_p2.metric("Précipitations", f"{meteo_periode.get('precipitations_mm', 'N/A')} mm")
+                col_p3.metric("Risque gel", "⚠️ Oui" if meteo_periode.get("risque_gel") == "oui" else "✅ Non")
+                st.caption(f"Risque sécheresse : {'⚠️ Oui' if meteo_periode.get('risque_secheresse') == 'oui' else '✅ Non'}")
+
+            # 6. Ressources et accès
+            st.markdown("### 💧 Infrastructures et environnement")
+            col_r1, col_r2, col_r3 = st.columns(3)
+            col_r1.metric("💦 Eau", result.get("ressources_eau", "Non précisé"))
+            col_r2.metric("🚜 Accès ruches", result.get("acces_ruches", "Non précisé"))
+            col_r3.metric("🐝 Concurrence", result.get("concurrence_apicole", "Non précisée"))
+
+            # 7. Risques
+            risques = result.get("risques", [])
+            if risques:
+                st.markdown("### ⚠️ Risques identifiés")
+                for r in risques:
+                    st.warning(f"• {r}")
+
+            # 8. Recommandations
+            recommandations = result.get("recommandations", [])
+            if recommandations:
+                st.markdown("### 💡 Recommandations pour la transhumance")
+                for rec in recommandations:
+                    st.success(f"✅ {rec}")
+
+            # Sauvegarde
             conn.execute("""
                 INSERT INTO transhumances (ruche_id, latitude_dest, longitude_dest, lieu_dest, potentiel_miel, recommandation_ia)
                 VALUES (?,?,?,?,?,?)
-            """, (opts[ruche_sel], lat_cible, lon_cible, lieu_nom, result.get("potentiel_miel"), json.dumps(result)))
+            """, (opts[ruche_sel], lat_cible, lon_cible, lieu_nom, result.get("potentiel_miel"), json.dumps(result, ensure_ascii=False)))
             conn.commit()
-            log_action("Prédiction transhumance", f"Ruche {ruche_sel} vers {lieu_nom}")
+            log_action("Prédiction transhumance détaillée", f"Ruche {ruche_sel} vers {lieu_nom} - période {periode_souhaitee}")
+
+            # Export JSON
+            st.download_button(
+                "⬇️ Exporter l'analyse (JSON)",
+                data=json.dumps(result, indent=2, ensure_ascii=False),
+                file_name=f"transhumance_{lieu_nom[:30]}_{periode_souhaitee.replace(' ','_')}.json",
+                mime="application/json"
+            )
+
         else:
             st.error(f"Erreur IA : {result.get('error', 'Réponse invalide')}")
 
-    # Historique des transhumances
+    # Historique
     with st.expander("📋 Historique des transhumances planifiées"):
         df_hist = pd.read_sql("""
-            SELECT t.id, r.nom, t.lieu_dest, t.potentiel_miel, t.date_depart, t.date_retour, t.statut
+            SELECT t.id, r.nom, t.lieu_dest, t.potentiel_miel, t.date_depart, t.date_retour, t.statut, t.created_at
             FROM transhumances t
             JOIN ruches r ON r.id = t.ruche_id
             ORDER BY t.created_at DESC LIMIT 20
