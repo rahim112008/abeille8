@@ -1627,17 +1627,57 @@ def predire_transhumance_ia(lat, lon, description_zone=""):
 Coordonnées : {lat:.4f}, {lon:.4f}
 Description de la zone : {description_zone}
 
-Analyse le potentiel de transhumance pour l'apiculture. Réponds UNIQUEMENT avec un objet JSON valide :
+Tu dois répondre UNIQUEMENT par un objet JSON valide, sans aucun texte avant ou après, sans balises markdown, sans explications. Le JSON doit respecter exactement cette structure :
 {{
-    "potentiel_miel": "excellent" / "bon" / "moyen" / "faible",
+    "potentiel_miel": "excellent" ou "bon" ou "moyen" ou "faible",
     "periode_optimale_depart": "mois recommandé pour installer les ruches",
     "periode_optimale_retour": "mois recommandé pour quitter la zone",
-    "duree_sejour_jours": entier,
+    "duree_sejour_jours": nombre entier,
     "risques": ["risque1", "risque2"],
     "recommandation": "conseil court",
     "flore_dominante": "espèce mellifère principale probable"
-}}"""
-    return ia_call_json(prompt)
+}}
+
+Ne réponds que le JSON. Pas de texte supplémentaire."""
+    
+    result = ia_call_json(prompt)
+    
+    # Si l'IA a retourné une erreur ou un JSON invalide, on fournit un fallback
+    if "error" in result:
+        # Essayer d'extraire un JSON à partir du texte d'erreur
+        error_text = result.get("error", "")
+        import re
+        json_match = re.search(r'\{.*\}', error_text, re.DOTALL)
+        if json_match:
+            try:
+                fallback = json.loads(json_match.group())
+                if "potentiel_miel" in fallback:
+                    return fallback
+            except:
+                pass
+        # Fallback intelligent selon le type de zone
+        is_urban = any(keyword in description_zone.lower() for keyword in ["urban", "city", "centre", "rue", "boulevard"])
+        if is_urban:
+            return {
+                "potentiel_miel": "faible",
+                "periode_optimale_depart": "Avril",
+                "periode_optimale_retour": "Mai",
+                "duree_sejour_jours": 30,
+                "risques": ["Zone urbaine - peu de flore mellifère", "Pesticides", "Dérangements"],
+                "recommandation": "Déplacer les ruches vers une zone rurale avec flore naturelle",
+                "flore_dominante": "Jardins ornementaux"
+            }
+        else:
+            return {
+                "potentiel_miel": "moyen",
+                "periode_optimale_depart": "Mars",
+                "periode_optimale_retour": "Juin",
+                "duree_sejour_jours": 90,
+                "risques": ["Sécheresse", "Pesticides agricoles"],
+                "recommandation": "Surveiller les ressources en eau et la floraison",
+                "flore_dominante": "Flore méditerranéenne variée"
+            }
+    return result
 
 
 # ════════════════════════════════════════════════════════════════════════════
