@@ -3501,17 +3501,19 @@ def page_pedigree():
     with tab3:
         st.markdown("#### Arbre généalogique (affichage simplifié)")
         # Requête récursive pour afficher l'arbre (limité à 3 générations)
-        arbre = conn.execute("""
-            WITH RECURSIVE arbre(id, nom, mere_id, pere_id, niveau, chemin) AS (
-                SELECT id, nom, mere_id, pere_id, 0, nom FROM reines WHERE mere_id IS NULL AND pere_id IS NULL
-                UNION ALL
-                SELECT r.id, r.nom, r.mere_id, r.pere_id, a.niveau+1, a.chemin || ' → ' || r.nom
-                FROM reines r
-                JOIN arbre a ON (r.mere_id = a.id OR r.pere_id = a.id)
-                WHERE a.niveau < 4
-            )
-            SELECT * FROM arbre ORDER BY niveau, nom
-        """, conn).fetchall()
+        # ✅ APRÈS (corrigé) — aucun paramètre
+arbre = conn.execute("""
+    WITH RECURSIVE arbre(id, nom, mere_id, pere_id, niveau, chemin) AS (
+        SELECT id, nom, mere_id, pere_id, 0, nom
+        FROM reines WHERE mere_id IS NULL AND pere_id IS NULL
+        UNION ALL
+        SELECT r.id, r.nom, r.mere_id, r.pere_id, a.niveau+1, a.chemin || ' → ' || r.nom
+        FROM reines r
+        JOIN arbre a ON (r.mere_id = a.id OR r.pere_id = a.id)
+        WHERE a.niveau < 4
+    )
+    SELECT * FROM arbre ORDER BY niveau, nom
+""").fetchall()   # ← supprimer ", conn"
         if arbre:
             for a in arbre:
                 st.markdown(f"{'  ' * a[4]}🐝 {a[1]} (niv.{a[4]})")
