@@ -1126,7 +1126,7 @@ def init_db_v4():
         ('cadres_insuffisants', 5, 1, 'Moins de 5 cadres de couvain');
     """)
 
-    # Tables élevage reines v5
+    # Tables élevage reines v5 – impérativement créées ici, avant le commit
     c.executescript("""
     CREATE TABLE IF NOT EXISTS elevage_reines (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1835,7 +1835,7 @@ def widget_ia_selector():
         📊 <b>Quota :</b> {cfg['quota']}<br>
         🖼️ <b>Vision (photo) :</b> {'✅ Oui' if cfg['vision'] else '❌ Texte seul'}<br>
         🔑 <b>Obtenir la clé :</b> <a href='{cfg['url']}' target='_blank'>{cfg['url']}</a>
-        {f"<br>⚠️ <b>Note :</b> {cfg['note']}" if cfg.get('note') else ""}
+        {f"<br>⚠️ <b>Note :</b> {cfg['note']}" if cfg.get("note") else ""}
         </div>
         """, unsafe_allow_html=True)
 
@@ -4629,7 +4629,6 @@ def page_elevage_reines():
         if df_reines_gen.empty:
             st.info("Aucune reine enregistrée. Ajoutez des reines dans la page Pedigree.")
         else:
-            # Affichage visuel des générations
             # Déterminer la génération de chaque reine
             def get_generation(reine_id, df, visited=None):
                 if visited is None:
