@@ -68,6 +68,219 @@ import urllib.request
 import urllib.parse
 import re
 
+
+# ════════════════════════════════════════════════════════════════════════════
+# SYSTÈME BILINGUE — ARABE / FRANÇAIS
+# ════════════════════════════════════════════════════════════════════════════
+
+TRANSLATIONS = {
+    "fr": {
+        "app_name": "ApiTrack Pro", "app_subtitle": "Gestion Apicole",
+        "logout": "🚪 Déconnexion", "langue": "🌐 Langue / اللغة",
+        "nav_dashboard": "🏠 Dashboard", "nav_ruches": "🐝 Mes ruches",
+        "nav_inspections": "🔍 Inspections", "nav_assistant_vocal": "🎤 Assistant vocal",
+        "nav_traitements": "💊 Traitements", "nav_productions": "🍯 Productions",
+        "nav_morpho": "🧬 Morphométrie IA", "nav_carto": "🗺️ Cartographie",
+        "nav_scanner_cadre": "📸 Scanner cadre", "nav_transhumance": "🚚 Transhumance",
+        "nav_pedigree": "🧬 Pedigree", "nav_meteo": "☀️ Météo & Miellée",
+        "nav_genetique": "📊 Génétique", "nav_flore": "🌿 Flore mellifère",
+        "nav_alertes": "⚠️ Alertes", "nav_journal": "📋 Journal",
+        "nav_admin": "⚙️ Administration",
+        "login_user": "Identifiant", "login_pwd": "Mot de passe",
+        "login_btn": "Se connecter",
+        "login_error": "Identifiants incorrects. (Démo : admin / admin1234)",
+        "login_hint": "admin / admin1234 pour la démo",
+        "login_subtitle": "Gestion apicole professionnelle",
+        "dashboard_title": "## 🏠 Tableau de bord",
+        "dashboard_season": "Saison printanière 2025",
+        "metric_ruches": "🐝 Ruches actives", "metric_miel": "🍯 Miel récolté (kg)",
+        "metric_insp": "🔍 Inspections (30j)", "metric_varroa": "⚠️ Varroa critique",
+        "chart_prod": "### 📈 Production mensuelle (kg)",
+        "chart_etat": "### 🐝 État des ruches",
+        "alertes_actives": "### ⚠️ Alertes actives",
+        "no_alert": "✅ Aucune alerte varroa critique en cours.",
+        "ruches_title": "## 🐝 Gestion des ruches",
+        "tab_liste": "📋 Liste des ruches", "tab_ajouter": "➕ Ajouter une ruche",
+        "export_csv": "⬇️ Exporter CSV",
+        "supprimer_ruche": "### 🗑️ Supprimer une ruche",
+        "choisir_ruche": "Choisir la ruche à supprimer",
+        "btn_supprimer": "⚠️ Supprimer définitivement",
+        "nouvelle_ruche": "**Nouvelle ruche**", "nom_ruche": "Nom / Reine*",
+        "race": "Race", "date_install": "Date d'installation",
+        "localisation_label": "Localisation", "btn_ajouter": "✅ Ajouter la ruche",
+        "notes": "Notes",
+        "insp_title": "## 🔍 Inspections",
+        "tab_historique": "📋 Historique", "tab_nouvelle": "➕ Nouvelle inspection",
+        "ruche_label": "Ruche*", "date_label": "Date",
+        "poids_label": "Poids (kg)", "cadres_label": "Nb cadres",
+        "varroa_label": "Varroa (%)", "reine_vue_label": "Reine vue",
+        "comportement_label": "Comportement",
+        "btn_enregistrer": "✅ Enregistrer l'inspection",
+        "evolution_varroa": "### 📈 Évolution du varroa",
+        "pedigree_title": "## 🧬 Pedigree & Sélection des Reines",
+        "tab_reines": "📋 Liste des reines",
+        "tab_add_reine": "➕ Ajouter une reine/filiation",
+        "tab_arbre": "🌳 Arbre généalogique",
+        "nouvelle_reine": "#### Nouvelle reine",
+        "nom_reine": "Nom de la reine*", "ruche_associee": "Ruche associée",
+        "date_naissance": "Date de naissance estimée",
+        "mere": "Mère", "pere": "Père",
+        "notes_perf": "Notes (caractéristiques, performances, etc.)",
+        "btn_save_reine": "💾 Enregistrer la reine",
+        "arbre_titre": "#### Arbre généalogique (affichage simplifié)",
+        "no_reine": "Aucune reine enregistrée.",
+        "no_genealogie": "Aucune généalogie disponible.",
+        "success_reine": "✅ Reine '{}' enregistrée.",
+        "connexion_msg": "Connexion",
+        "trait_title": "## 💊 Traitements vétérinaires",
+        "tab_encours": "📋 En cours & historique",
+        "tab_nouveau_trait": "➕ Nouveau traitement",
+        "prod_title": "## 🍯 Productions",
+        "tab_recoltes": "🍯 Récoltes", "tab_graphiques": "📊 Graphiques",
+        "tab_nouvelle_rec": "➕ Nouvelle récolte",
+        "meteo_title": "## ☀️ Météo & Miellée — Prévisions 7 jours",
+        "alerte_title": "## ⚠️ Alertes",
+        "journal_title": "## 📋 Journal d'activité",
+        "genetique_title": "## 📊 Génétique & Sélection",
+        "flore_title": "## 🌿 Flore mellifère — Calendrier",
+        "scanner_title": "## 📸 Scanner de Cadre - Détection IA",
+        "transhu_title": "## 🚚 Prédiction de Transhumance - Analyse complète de zone",
+        "vocal_title": "## 🎤 Assistant Vocal d'Inspection",
+        "morpho_title": "## 🧬 Morphométrie IA — Classification raciale",
+        "carto_title": "## 🗺️ Cartographie — Zones mellifères + Analyse IA",
+        "admin_title": "## ⚙️ Administration",
+        "tab_profil": "🏠 Profil rucher", "tab_ia": "🤖 Clé API IA",
+        "tab_pwd": "🔐 Mot de passe", "tab_db": "💾 Base de données",
+        "tab_import": "📂 Import CSV",
+        "nom_rucher": "Nom du rucher", "btn_sauvegarder": "💾 Sauvegarder",
+        "journal_vide": "Le journal est vide.",
+        "no_trait": "Aucun traitement enregistré.",
+        "no_analyse": "Aucune analyse morphométrique enregistrée.",
+        "no_insp_vocale": "Aucune inspection vocale enregistrée.",
+        "no_analyse_cadre": "Aucune analyse enregistrée.",
+        "no_transhu": "Aucune transhumance planifiée.",
+        "rechercher_ville": "#### 🔍 Rechercher une ville",
+        "nom_ville_label": "Nom de la ville",
+        "centrer_btn": "📍 Centrer",
+    },
+    "ar": {
+        "app_name": "ApiTrack Pro", "app_subtitle": "إدارة النحل",
+        "logout": "🚪 تسجيل الخروج", "langue": "🌐 Langue / اللغة",
+        "nav_dashboard": "🏠 لوحة القيادة", "nav_ruches": "🐝 خلاياي",
+        "nav_inspections": "🔍 التفتيشات", "nav_assistant_vocal": "🎤 المساعد الصوتي",
+        "nav_traitements": "💊 العلاجات", "nav_productions": "🍯 الإنتاج",
+        "nav_morpho": "🧬 القياس الشكلي", "nav_carto": "🗺️ الخرائط",
+        "nav_scanner_cadre": "📸 مسح الإطار", "nav_transhumance": "🚚 الترحال",
+        "nav_pedigree": "🧬 سجل الأنساب", "nav_meteo": "☀️ الطقس والرحيق",
+        "nav_genetique": "📊 علم الوراثة", "nav_flore": "🌿 النباتات الرحيقية",
+        "nav_alertes": "⚠️ التنبيهات", "nav_journal": "📋 السجل",
+        "nav_admin": "⚙️ الإدارة",
+        "login_user": "اسم المستخدم", "login_pwd": "كلمة المرور",
+        "login_btn": "تسجيل الدخول",
+        "login_error": "بيانات خاطئة. (تجريبي: admin / admin1234)",
+        "login_hint": "admin / admin1234 للنسخة التجريبية",
+        "login_subtitle": "إدارة النحل الاحترافية",
+        "dashboard_title": "## 🏠 لوحة القيادة",
+        "dashboard_season": "موسم الربيع 2025",
+        "metric_ruches": "🐝 الخلايا النشطة", "metric_miel": "🍯 العسل المحصود (كغ)",
+        "metric_insp": "🔍 التفتيشات (30 يوم)", "metric_varroa": "⚠️ فاروا حرجة",
+        "chart_prod": "### 📈 الإنتاج الشهري (كغ)",
+        "chart_etat": "### 🐝 حالة الخلايا",
+        "alertes_actives": "### ⚠️ التنبيهات النشطة",
+        "no_alert": "✅ لا توجد تنبيهات حرجة حالياً.",
+        "ruches_title": "## 🐝 إدارة الخلايا",
+        "tab_liste": "📋 قائمة الخلايا", "tab_ajouter": "➕ إضافة خلية",
+        "export_csv": "⬇️ تصدير CSV",
+        "supprimer_ruche": "### 🗑️ حذف خلية",
+        "choisir_ruche": "اختر الخلية للحذف",
+        "btn_supprimer": "⚠️ حذف نهائي",
+        "nouvelle_ruche": "**خلية جديدة**", "nom_ruche": "الاسم / الملكة*",
+        "race": "السلالة", "date_install": "تاريخ التركيب",
+        "localisation_label": "الموقع", "btn_ajouter": "✅ إضافة الخلية",
+        "notes": "ملاحظات",
+        "insp_title": "## 🔍 التفتيشات",
+        "tab_historique": "📋 السجل", "tab_nouvelle": "➕ تفتيش جديد",
+        "ruche_label": "الخلية*", "date_label": "التاريخ",
+        "poids_label": "الوزن (كغ)", "cadres_label": "عدد الأطر",
+        "varroa_label": "فاروا (%)", "reine_vue_label": "الملكة مرئية",
+        "comportement_label": "السلوك",
+        "btn_enregistrer": "✅ حفظ التفتيش",
+        "evolution_varroa": "### 📈 تطور الفاروا",
+        "pedigree_title": "## 🧬 سجل الأنساب واختيار الملكات",
+        "tab_reines": "📋 قائمة الملكات",
+        "tab_add_reine": "➕ إضافة ملكة / نسب",
+        "tab_arbre": "🌳 شجرة النسب",
+        "nouvelle_reine": "#### ملكة جديدة",
+        "nom_reine": "اسم الملكة*", "ruche_associee": "الخلية المرتبطة",
+        "date_naissance": "تاريخ الميلاد التقريبي",
+        "mere": "الأم", "pere": "الأب",
+        "notes_perf": "ملاحظات (الخصائص، الأداء...)",
+        "btn_save_reine": "💾 حفظ الملكة",
+        "arbre_titre": "#### شجرة النسب (عرض مبسط)",
+        "no_reine": "لا توجد ملكات مسجلة.",
+        "no_genealogie": "لا توجد بيانات أنساب متاحة.",
+        "success_reine": "✅ تم تسجيل الملكة '{}'.",
+        "connexion_msg": "تسجيل الدخول",
+        "trait_title": "## 💊 العلاجات البيطرية",
+        "tab_encours": "📋 الجارية والسابقة",
+        "tab_nouveau_trait": "➕ علاج جديد",
+        "prod_title": "## 🍯 الإنتاج",
+        "tab_recoltes": "🍯 الحصاد", "tab_graphiques": "📊 الرسوم البيانية",
+        "tab_nouvelle_rec": "➕ حصاد جديد",
+        "meteo_title": "## ☀️ الطقس والرحيق — توقعات 7 أيام",
+        "alerte_title": "## ⚠️ التنبيهات",
+        "journal_title": "## 📋 سجل النشاط",
+        "genetique_title": "## 📊 علم الوراثة والانتقاء",
+        "flore_title": "## 🌿 النباتات الرحيقية — التقويم",
+        "scanner_title": "## 📸 مسح الإطار - الكشف بالذكاء الاصطناعي",
+        "transhu_title": "## 🚚 التنبؤ بالترحال - تحليل شامل للمنطقة",
+        "vocal_title": "## 🎤 المساعد الصوتي للتفتيش",
+        "morpho_title": "## 🧬 القياس الشكلي بالذكاء الاصطناعي — تصنيف السلالات",
+        "carto_title": "## 🗺️ الخرائط — المناطق الرحيقية + تحليل الذكاء الاصطناعي",
+        "admin_title": "## ⚙️ الإدارة",
+        "tab_profil": "🏠 ملف المنحل", "tab_ia": "🤖 مفتاح الذكاء الاصطناعي",
+        "tab_pwd": "🔐 كلمة المرور", "tab_db": "💾 قاعدة البيانات",
+        "tab_import": "📂 استيراد CSV",
+        "nom_rucher": "اسم المنحل", "btn_sauvegarder": "💾 حفظ",
+        "journal_vide": "السجل فارغ.",
+        "no_trait": "لا توجد علاجات مسجلة.",
+        "no_analyse": "لا توجد تحليلات مسجلة.",
+        "no_insp_vocale": "لا توجد تفتيشات صوتية مسجلة.",
+        "no_analyse_cadre": "لا توجد تحليلات مسجلة.",
+        "no_transhu": "لا توجد ترحالات مخططة.",
+        "rechercher_ville": "#### 🔍 البحث عن مدينة",
+        "nom_ville_label": "اسم المدينة",
+        "centrer_btn": "📍 تمركز",
+    }
+}
+
+
+def get_lang():
+    return st.session_state.get("langue", "fr")
+
+
+def T(key):
+    lang = get_lang()
+    return TRANSLATIONS[lang].get(key, TRANSLATIONS["fr"].get(key, key))
+
+
+def inject_rtl_css():
+    if get_lang() == "ar":
+        st.markdown("""
+        <style>
+        .stApp, .main .block-container, [data-testid="stSidebar"],
+        .stMarkdown, h1, h2, h3, h4, p, label {
+            direction: rtl !important;
+            text-align: right !important;
+            font-family: 'Segoe UI', 'Arial', sans-serif !important;
+        }
+        .stButton > button, [data-testid="stFormSubmitButton"] button {
+            direction: rtl !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION STREAMLIT
 # ════════════════════════════════════════════════════════════════════════════
@@ -773,14 +986,14 @@ def login_page():
         <div style='text-align:center;margin-bottom:24px'>
             <div style='font-size:3rem'>🐝</div>
             <h1 style='font-family:Playfair Display,serif;color:#F0F4FF;font-size:2rem;margin:8px 0 4px'>ApiTrack Pro</h1>
-            <p style='color:#A8B4CC;font-size:.9rem'>Gestion apicole professionnelle</p>
+            <p style='color:#A8B4CC;font-size:.9rem'>' + T('login_subtitle') + '</p>
         </div>
         """, unsafe_allow_html=True)
 
         with st.form("login_form"):
-            username = st.text_input("Identifiant", placeholder="admin")
-            password = st.text_input("Mot de passe", type="password", placeholder="••••••••")
-            submitted = st.form_submit_button("Se connecter", use_container_width=True)
+            username = st.text_input(T("login_user"), placeholder="admin")
+            password = st.text_input(T("login_pwd"), type="password", placeholder="••••••••")
+            submitted = st.form_submit_button(T("login_btn"), use_container_width=True)
 
         if submitted:
             user = check_login(username, password)
@@ -790,9 +1003,9 @@ def login_page():
                 log_action("Connexion", f"Utilisateur {username} connecté")
                 st.rerun()
             else:
-                st.error("Identifiants incorrects. (Démo : admin / admin1234)")
+                st.error(T("login_error"))
 
-        st.markdown("<p style='text-align:center;font-size:.75rem;color:#A8B4CC;margin-top:16px'>admin / admin1234 pour la démo</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='text-align:center;font-size:.75rem;color:#A8B4CC;margin-top:16px'>{T('login_hint')}</p>", unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1780,24 +1993,35 @@ def sidebar():
         rucher_nom = get_setting("rucher_nom", "Mon Rucher")
         st.markdown(f"<div style='font-size:.75rem;color:#6B7A99;margin-bottom:12px'>📍 {rucher_nom}</div>", unsafe_allow_html=True)
 
+        # ── Sélecteur de langue ─────────────────────────────────────────────
+        _lang_opts = ["🇫🇷 Français", "🇩🇿 العربية"]
+        _lang_idx = 0 if get_lang() == "fr" else 1
+        _lang_choice = st.sidebar.selectbox(
+            T("langue"), _lang_opts, index=_lang_idx, key="lang_selector"
+        )
+        _new_lang = "ar" if "العربية" in _lang_choice else "fr"
+        if _new_lang != get_lang():
+            st.session_state["langue"] = _new_lang
+            st.rerun()
+
         pages = {
-            "🏠 Dashboard": "dashboard",
-            "🐝 Mes ruches": "ruches",
-            "🔍 Inspections": "inspections",
-            "🎤 Assistant vocal": "assistant_vocal",
-            "💊 Traitements": "traitements",
-            "🍯 Productions": "productions",
-            "🧬 Morphométrie IA": "morpho",
-            "🗺️ Cartographie": "carto",
-            "📸 Scanner cadre": "scanner_cadre",
-            "🚚 Transhumance": "transhumance",
-            "🧬 Pedigree": "pedigree",
-            "☀️ Météo & Miellée": "meteo",
-            "📊 Génétique": "genetique",
-            "🌿 Flore mellifère": "flore",
-            "⚠️ Alertes": "alertes",
-            "📋 Journal": "journal",
-            "⚙️ Administration": "admin",
+            T("nav_dashboard"): "dashboard",
+            T("nav_ruches"): "ruches",
+            T("nav_inspections"): "inspections",
+            T("nav_assistant_vocal"): "assistant_vocal",
+            T("nav_traitements"): "traitements",
+            T("nav_productions"): "productions",
+            T("nav_morpho"): "morpho",
+            T("nav_carto"): "carto",
+            T("nav_scanner_cadre"): "scanner_cadre",
+            T("nav_transhumance"): "transhumance",
+            T("nav_pedigree"): "pedigree",
+            T("nav_meteo"): "meteo",
+            T("nav_genetique"): "genetique",
+            T("nav_flore"): "flore",
+            T("nav_alertes"): "alertes",
+            T("nav_journal"): "journal",
+            T("nav_admin"): "admin",
         }
 
         if "page" not in st.session_state:
@@ -1810,7 +2034,7 @@ def sidebar():
 
         st.sidebar.markdown("<hr style='border-color:#2E3A52;margin:12px 0'>", unsafe_allow_html=True)
         st.sidebar.markdown(f"<div style='font-size:.75rem;color:#6B7A99'>👤 {st.session_state.get('username','admin')}</div>", unsafe_allow_html=True)
-        if st.sidebar.button("🚪 Déconnexion", use_container_width=True):
+        if st.sidebar.button(T("logout"), use_container_width=True):
             log_action("Déconnexion", f"Utilisateur {st.session_state.get('username')} déconnecté")
             st.session_state.logged_in = False
             st.rerun()
@@ -1820,7 +2044,7 @@ def sidebar():
 # PAGE : DASHBOARD (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_dashboard():
-    st.markdown("## 🏠 Tableau de bord")
+    st.markdown(T("dashboard_title"))
     rucher = get_setting("rucher_nom", "Mon Rucher")
     localisation = get_setting("localisation", "")
     st.markdown(f"<p style='color:#A8B4CC;margin-top:-10px'>Saison printanière 2025 · {rucher} · {localisation}</p>", unsafe_allow_html=True)
@@ -1832,16 +2056,16 @@ def page_dashboard():
     critiques = conn.execute("SELECT COUNT(*) FROM inspections WHERE varroa_pct >= 3.0 AND date_inspection >= date('now','-7 days')").fetchone()[0]
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("🐝 Ruches actives", nb_ruches, "+3 ce mois")
-    col2.metric("🍯 Miel récolté (kg)", f"{total_miel:.0f}", "+18% vs 2024")
-    col3.metric("🔍 Inspections (30j)", nb_insp, "Cadence correcte")
-    col4.metric("⚠️ Varroa critique", critiques, "Intervention requise" if critiques else "RAS", delta_color="inverse")
+    col1.metric(T("metric_ruches"), nb_ruches, "+3 ce mois")
+    col2.metric(T("metric_miel"), f"{total_miel:.0f}", "+18% vs 2024")
+    col3.metric(T("metric_insp"), nb_insp, "Cadence correcte")
+    col4.metric(T("metric_varroa"), critiques, "Intervention requise" if critiques else "RAS", delta_color="inverse")
 
     st.markdown("<br>", unsafe_allow_html=True)
     col_a, col_b = st.columns(2)
 
     with col_a:
-        st.markdown("### 📈 Production mensuelle (kg)")
+        st.markdown(T("chart_prod"))
         df_prod = pd.read_sql("""
             SELECT strftime('%Y-%m', date_recolte) as mois,
                    type_produit,
@@ -1862,7 +2086,7 @@ def page_dashboard():
             st.info("Aucune donnée de production.")
 
     with col_b:
-        st.markdown("### 🐝 État des ruches")
+        st.markdown(T("chart_etat"))
         df_ruches = pd.read_sql("""
             SELECT r.nom, r.race,
                    COALESCE(i.varroa_pct, 0) as varroa,
@@ -1880,7 +2104,7 @@ def page_dashboard():
             df_ruches.columns = ["Ruche","Race","Varroa%","Cadres","Poids(kg)","Statut"]
             st.dataframe(df_ruches, use_container_width=True, hide_index=True)
 
-    st.markdown("### ⚠️ Alertes actives")
+    st.markdown(T("alertes_actives"))
     df_alertes = pd.read_sql("""
         SELECT r.nom, i.varroa_pct, i.date_inspection, i.notes
         FROM inspections i
@@ -1897,14 +2121,14 @@ def page_dashboard():
             seuil = "CRITIQUE (>3%)" if row["varroa_pct"] >= 3.0 else "ATTENTION (>2%)"
             st.warning(f"{lvl} **{row['nom']}** — Varroa **{row['varroa_pct']}%** — {seuil} · {row['date_inspection']}")
     else:
-        st.success("✅ Aucune alerte varroa critique en cours.")
+        st.success(T("no_alert"))
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # PAGE : GESTION DES RUCHES (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_ruches():
-    st.markdown("## 🐝 Gestion des ruches")
+    st.markdown(T("ruches_title"))
 
     conn = get_db()
     df = pd.read_sql("""
@@ -1919,20 +2143,20 @@ def page_ruches():
         ORDER BY r.id
     """, conn)
 
-    tab1, tab2 = st.tabs(["📋 Liste des ruches", "➕ Ajouter une ruche"])
+    tab1, tab2 = st.tabs([T("tab_liste"), T("tab_ajouter")])
 
     with tab1:
         if not df.empty:
             st.dataframe(df, use_container_width=True, hide_index=True)
             csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Exporter CSV", csv, "ruches.csv", "text/csv")
+            st.download_button(T("export_csv"), csv, "ruches.csv", "text/csv")
 
-        st.markdown("### 🗑️ Supprimer une ruche")
+        st.markdown(T("supprimer_ruche"))
         ruche_ids = conn.execute("SELECT id, nom FROM ruches").fetchall()
         if ruche_ids:
             options = {f"R{r[0]:02d} — {r[1]}": r[0] for r in ruche_ids}
-            selected = st.selectbox("Choisir la ruche à supprimer", options.keys())
-            if st.button("⚠️ Supprimer définitivement", type="secondary"):
+            selected = st.selectbox(T("choisir_ruche"), options.keys())
+            if st.button(T("btn_supprimer"), type="secondary"):
                 rid = options[selected]
                 conn.execute("DELETE FROM ruches WHERE id=?", (rid,))
                 conn.commit()
@@ -1942,17 +2166,17 @@ def page_ruches():
 
     with tab2:
         with st.form("add_ruche"):
-            st.markdown("**Nouvelle ruche**")
+            st.markdown(T("nouvelle_ruche"))
             col1, col2 = st.columns(2)
-            nom = col1.text_input("Nom / Reine*")
-            race = col2.selectbox("Race", ["intermissa", "sahariensis", "ligustica", "carnica", "hybride"])
-            date_inst = col1.date_input("Date d'installation", datetime.date.today())
-            localisation = col2.text_input("Localisation")
+            nom = col1.text_input(T("nom_ruche"))
+            race = col2.selectbox(T("race"), ["intermissa", "sahariensis", "ligustica", "carnica", "hybride"])
+            date_inst = col1.date_input(T("date_install"), datetime.date.today())
+            localisation = col2.text_input(T("localisation_label"))
             col3, col4 = st.columns(2)
             lat = col3.number_input("Latitude", value=34.88, format="%.4f")
             lon = col4.number_input("Longitude", value=1.32, format="%.4f")
-            notes = st.text_area("Notes")
-            submitted = st.form_submit_button("✅ Ajouter la ruche")
+            notes = st.text_area(T("notes"))
+            submitted = st.form_submit_button(T("btn_ajouter"))
 
         if submitted and nom:
             conn.execute("""
@@ -1971,10 +2195,10 @@ def page_ruches():
 # PAGE : INSPECTIONS (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_inspections():
-    st.markdown("## 🔍 Inspections")
+    st.markdown(T("insp_title"))
     conn = get_db()
 
-    tab1, tab2 = st.tabs(["📋 Historique", "➕ Nouvelle inspection"])
+    tab1, tab2 = st.tabs([T("tab_historique"), T("tab_nouvelle")])
 
     with tab1:
         df = pd.read_sql("""
@@ -1989,9 +2213,9 @@ def page_inspections():
             df["varroa_pct"] = df["varroa_pct"].apply(lambda x: f"{x}%" if x else "-")
             st.dataframe(df, use_container_width=True, hide_index=True)
             csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇️ Exporter CSV", csv, "inspections.csv", "text/csv")
+            st.download_button(T("export_csv"), csv, "inspections.csv", "text/csv")
 
-        st.markdown("### 📈 Évolution du varroa")
+        st.markdown(T("evolution_varroa"))
         df_v = pd.read_sql("""
             SELECT r.nom, i.date_inspection, i.varroa_pct
             FROM inspections i JOIN ruches r ON r.id=i.ruche_id
@@ -2013,17 +2237,17 @@ def page_inspections():
 
         with st.form("add_inspection"):
             col1, col2 = st.columns(2)
-            ruche_sel = col1.selectbox("Ruche*", opts.keys())
-            date_insp = col2.date_input("Date", datetime.date.today())
+            ruche_sel = col1.selectbox(T("ruche_label"), opts.keys())
+            date_insp = col2.date_input(T("date_label"), datetime.date.today())
             col3, col4, col5 = st.columns(3)
-            poids = col3.number_input("Poids (kg)", 0.0, 80.0, 25.0, 0.1)
-            cadres = col4.number_input("Nb cadres", 0, 20, 10)
-            varroa = col5.number_input("Varroa (%)", 0.0, 20.0, 1.0, 0.1)
+            poids = col3.number_input(T("poids_label"), 0.0, 80.0, 25.0, 0.1)
+            cadres = col4.number_input(T("cadres_label"), 0, 20, 10)
+            varroa = col5.number_input(T("varroa_label"), 0.0, 20.0, 1.0, 0.1)
             col6, col7 = st.columns(2)
-            reine = col6.checkbox("Reine vue", value=True)
-            comportement = col7.selectbox("Comportement", ["calme", "nerveuse", "agressive", "très calme"])
+            reine = col6.checkbox(T("reine_vue_label"), value=True)
+            comportement = col7.selectbox(T("comportement_label"), ["calme", "nerveuse", "agressive", "très calme"])
             notes = st.text_area("Notes / Observations")
-            submitted = st.form_submit_button("✅ Enregistrer l'inspection")
+            submitted = st.form_submit_button(T("btn_enregistrer"))
 
         if submitted:
             rid = opts[ruche_sel]
@@ -2048,7 +2272,7 @@ def page_inspections():
 # PAGE : TRAITEMENTS (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_traitements():
-    st.markdown("## 💊 Traitements vétérinaires")
+    st.markdown(T("trait_title"))
     conn = get_db()
 
     tab1, tab2 = st.tabs(["📋 En cours & historique", "➕ Nouveau traitement"])
@@ -2075,7 +2299,7 @@ def page_traitements():
                     st.markdown("---")
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
-            st.info("Aucun traitement enregistré.")
+            st.info(T("no_trait"))
 
     with tab2:
         ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
@@ -2111,7 +2335,7 @@ def page_traitements():
 # PAGE : PRODUCTIONS (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_productions():
-    st.markdown("## 🍯 Productions")
+    st.markdown(T("prod_title"))
     conn = get_db()
 
     total_miel = conn.execute("SELECT COALESCE(SUM(quantite_kg),0) FROM recoltes WHERE type_produit='miel'").fetchone()[0]
@@ -2123,7 +2347,7 @@ def page_productions():
     col2.metric("🌼 Pollen (kg)", f"{total_pollen:.1f}", "Qualité A")
     col3.metric("👑 Gelée royale (kg)", f"{total_gr:.2f}", "10-HDA 2.1%")
 
-    tab1, tab2, tab3 = st.tabs(["🍯 Récoltes", "📊 Graphiques", "➕ Nouvelle récolte"])
+    tab1, tab2, tab3 = st.tabs([T("tab_recoltes"), T("tab_graphiques"), T("tab_nouvelle_rec")])
 
     with tab1:
         df = pd.read_sql("""
@@ -2362,7 +2586,7 @@ def _appliquer_mesures_auto(result):
 
 
 def page_morpho():
-    st.markdown("## 🧬 Morphométrie IA — Classification raciale")
+    st.markdown(T("morpho_title"))
     st.markdown("<p style='color:#A8B4CC'>Mesures morphométriques + analyse IA multi-fournisseurs (Ruttner 1988)</p>",
                 unsafe_allow_html=True)
 
@@ -2738,7 +2962,7 @@ def page_morpho():
             csv = df.to_csv(index=False).encode("utf-8")
             st.download_button("⬇️ Exporter CSV", csv, "morphometrie.csv", "text/csv")
         else:
-            st.info("Aucune analyse morphométrique enregistrée.")
+            st.info(T("no_analyse"))
 
     conn.close()
 
@@ -2747,7 +2971,7 @@ def page_morpho():
 # PAGE : CARTOGRAPHIE (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_carto():
-    st.markdown("## 🗺️ Cartographie — Zones mellifères + Analyse IA")
+    st.markdown(T("carto_title"))
 
     ia_active = widget_cle_api()
 
@@ -2759,10 +2983,10 @@ def page_carto():
         df_ruches = pd.read_sql("SELECT * FROM ruches WHERE statut='actif' AND latitude IS NOT NULL", conn)
 
         # Recherche de ville
-        st.markdown("#### 🔍 Rechercher une ville")
+        st.markdown(T("rechercher_ville"))
         col_search1, col_search2 = st.columns([3, 1])
-        ville_recherche = col_search1.text_input("Nom de la ville", placeholder="Ex: Tlemcen, Oran, Alger...")
-        if col_search2.button("📍 Centrer", use_container_width=True) and ville_recherche:
+        ville_recherche = col_search1.text_input(T("nom_ville_label"), placeholder="Ex: Tlemcen, Oran, Alger...")
+        if col_search2.button(T("centrer_btn"), use_container_width=True) and ville_recherche:
             lat, lon = geocode_ville(ville_recherche)
             if lat and lon:
                 st.session_state["map_center"] = (lat, lon)
@@ -3017,7 +3241,7 @@ def _afficher_diagnostic_zone(result, nom_zone):
 # PAGE : ASSISTANT VOCAL D'INSPECTION
 # ════════════════════════════════════════════════════════════════════════════
 def page_assistant_vocal():
-    st.markdown("## 🎤 Assistant Vocal d'Inspection")
+    st.markdown(T("vocal_title"))
     st.markdown("Dictée intelligente : parlez, l'IA extrait les données d'inspection.")
 
     ia_active = widget_cle_api()
@@ -3176,7 +3400,7 @@ def page_assistant_vocal():
         if not df_hist.empty:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
         else:
-            st.info("Aucune inspection vocale enregistrée.")
+            st.info(T("no_insp_vocale"))
     conn.close()
 
 
@@ -3184,7 +3408,7 @@ def page_assistant_vocal():
 # PAGE : SCANNER DE CADRE IA
 # ════════════════════════════════════════════════════════════════════════════
 def page_scanner_cadre():
-    st.markdown("## 📸 Scanner de Cadre - Détection IA")
+    st.markdown(T("scanner_title"))
     st.markdown("Téléchargez une photo d'un cadre de couvain. L'IA analysera les maladies, comptera les abeilles et détectera la reine.")
 
     ia_active = widget_cle_api()
@@ -3243,7 +3467,7 @@ def page_scanner_cadre():
         if not df_hist.empty:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
         else:
-            st.info("Aucune analyse enregistrée.")
+            st.info(T("no_analyse_cadre"))
     conn.close()
 
 
@@ -3251,7 +3475,7 @@ def page_scanner_cadre():
 # PAGE : PRÉDICTION DE TRANSHUMANCE
 # ════════════════════════════════════════════════════════════════════════════
 def page_transhumance():
-    st.markdown("## 🚚 Prédiction de Transhumance - Analyse complète de zone")
+    st.markdown(T("transhu_title"))
     st.markdown("Obtenez une analyse détaillée : flore, météo, risques, recommandations pour une transhumance réussie.")
 
     ia_active = widget_cle_api()
@@ -3433,7 +3657,7 @@ def page_transhumance():
         if not df_hist.empty:
             st.dataframe(df_hist, use_container_width=True, hide_index=True)
         else:
-            st.info("Aucune transhumance planifiée.")
+            st.info(T("no_transhu"))
     conn.close()
 
 
@@ -3441,10 +3665,10 @@ def page_transhumance():
 # PAGE : PEDIGREE & SÉLECTION
 # ════════════════════════════════════════════════════════════════════════════
 def page_pedigree():
-    st.markdown("## 🧬 Pedigree & Sélection des Reines")
+    st.markdown(T("pedigree_title"))
     conn = get_db()
 
-    tab1, tab2, tab3 = st.tabs(["📋 Liste des reines", "➕ Ajouter une reine/filiation", "🌳 Arbre généalogique"])
+    tab1, tab2, tab3 = st.tabs([T("tab_reines"), T("tab_add_reine"), T("tab_arbre")])
 
     with tab1:
         df_reines = pd.read_sql("""
@@ -3459,9 +3683,9 @@ def page_pedigree():
         if not df_reines.empty:
             st.dataframe(df_reines, use_container_width=True, hide_index=True)
             csv = df_reines.to_csv(index=False).encode()
-            st.download_button("⬇️ Exporter CSV", csv, "reines.csv", "text/csv")
+            st.download_button(T("export_csv"), csv, "reines.csv", "text/csv")
         else:
-            st.info("Aucune reine enregistrée.")
+            st.info(T("no_reine"))
 
     with tab2:
         ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
@@ -3471,19 +3695,19 @@ def page_pedigree():
         reine_opts["(Inconnue)"] = None
 
         with st.form("add_reine"):
-            st.markdown("#### Nouvelle reine")
+            st.markdown(T("nouvelle_reine"))
             col1, col2 = st.columns(2)
-            nom = col1.text_input("Nom de la reine*")
-            ruche = col2.selectbox("Ruche associée", ruche_opts.keys())
+            nom = col1.text_input(T("nom_reine"))
+            ruche = col2.selectbox(T("ruche_associee"), ruche_opts.keys())
             col3, col4 = st.columns(2)
             race = col3.selectbox("Race", ["intermissa", "sahariensis", "ligustica", "carnica", "hybride"])
-            date_naiss = col4.date_input("Date de naissance estimée", datetime.date.today())
+            date_naiss = col4.date_input(T("date_naissance"), datetime.date.today())
             col5, col6 = st.columns(2)
-            mere = col5.selectbox("Mère", reine_opts.keys())
-            pere = col6.selectbox("Père", reine_opts.keys())
+            mere = col5.selectbox(T("mere"), reine_opts.keys())
+            pere = col6.selectbox(T("pere"), reine_opts.keys())
             qualite = st.selectbox("Qualité", ["standard", "reproductrice", "élite", "à réformer"])
-            notes = st.text_area("Notes (caractéristiques, performances, etc.)")
-            submitted = st.form_submit_button("💾 Enregistrer la reine")
+            notes = st.text_area(T("notes_perf"))
+            submitted = st.form_submit_button(T("btn_save_reine"))
 
         if submitted and nom:
             rid = ruche_opts[ruche]
@@ -3495,11 +3719,11 @@ def page_pedigree():
             """, (nom, rid, mere_id, pere_id, str(date_naiss), race, qualite, notes))
             conn.commit()
             log_action("Reine ajoutée", f"{nom} (ruche {ruche})")
-            st.success(f"✅ Reine '{nom}' enregistrée.")
+            st.success(T("success_reine").format(nom))
             st.rerun()
 
     with tab3:
-        st.markdown("#### Arbre généalogique (affichage simplifié)")
+        st.markdown(T("arbre_titre"))
         # Requête récursive pour afficher l'arbre (limité à 3 générations)
         arbre = conn.execute("""
             WITH RECURSIVE arbre(id, nom, mere_id, pere_id, niveau, chemin) AS (
@@ -3511,12 +3735,12 @@ def page_pedigree():
                 WHERE a.niveau < 4
             )
             SELECT * FROM arbre ORDER BY niveau, nom
-        """, conn).fetchall()
+        """).fetchall()
         if arbre:
             for a in arbre:
                 st.markdown(f"{'  ' * a[4]}🐝 {a[1]} (niv.{a[4]})")
         else:
-            st.info("Aucune généalogie disponible.")
+            st.info(T("no_genealogie"))
 
     conn.close()
 
@@ -3525,7 +3749,7 @@ def page_pedigree():
 # PAGE : MÉTÉO & MIELLÉE (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_meteo():
-    st.markdown("## ☀️ Météo & Miellée — Prévisions 7 jours")
+    st.markdown(T("meteo_title"))
     localisation = get_setting("localisation", "Tlemcen")
     st.markdown(f"<p style='color:#A8B4CC'>Données simulées · {localisation}</p>", unsafe_allow_html=True)
 
@@ -3583,7 +3807,7 @@ def page_meteo():
 # PAGE : GÉNÉTIQUE & SÉLECTION (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_genetique():
-    st.markdown("## 📊 Génétique & Sélection")
+    st.markdown(T("genetique_title"))
     conn = get_db()
 
     df = pd.read_sql("""
@@ -3646,7 +3870,7 @@ def page_genetique():
 # PAGE : FLORE MELLIFÈRE (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_flore():
-    st.markdown("## 🌿 Flore mellifère — Calendrier")
+    st.markdown(T("flore_title"))
     flore_data = [
         {"Espèce": "Romarin (Rosmarinus officinalis)", "Nectar": "⭐⭐⭐", "Pollen": "⭐⭐", "Propolis": "-", "Période": "Fév–Avr", "Potentiel": "Élevé"},
         {"Espèce": "Jujubier (Ziziphus lotus)", "Nectar": "⭐⭐⭐⭐", "Pollen": "⭐⭐⭐", "Propolis": "-", "Période": "Avr–Juin", "Potentiel": "Exceptionnel"},
@@ -3685,7 +3909,7 @@ def page_flore():
 # PAGE : ALERTES (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_alertes():
-    st.markdown("## ⚠️ Alertes")
+    st.markdown(T("alerte_title"))
     conn = get_db()
 
     df_crit = pd.read_sql("""
@@ -3733,17 +3957,17 @@ def page_alertes():
 # PAGE : JOURNAL (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def page_journal():
-    st.markdown("## 📋 Journal d'activité")
+    st.markdown(T("journal_title"))
     conn = get_db()
     df = pd.read_sql("SELECT * FROM journal ORDER BY timestamp DESC LIMIT 100", conn)
     conn.close()
 
     if not df.empty:
         csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Exporter CSV", csv, "journal.csv", "text/csv")
+        st.download_button(T("export_csv"), csv, "journal.csv", "text/csv")
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
-        st.info("Le journal est vide.")
+        st.info(T("journal_vide"))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3771,10 +3995,10 @@ def import_csv(table_name, df):
     st.success(f"✅ {len(df_import)} lignes importées dans {table_name}.")
 
 def page_admin():
-    st.markdown("## ⚙️ Administration")
+    st.markdown(T("admin_title"))
     conn = get_db()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Profil rucher", "🤖 Clé API IA", "🔐 Mot de passe", "💾 Base de données", "📂 Import CSV"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([T("tab_profil"), T("tab_ia"), T("tab_pwd"), T("tab_db"), T("tab_import")])
 
     with tab1:
         rucher_nom = get_setting("rucher_nom", "Mon Rucher")
@@ -3942,6 +4166,7 @@ def page_admin():
 # ════════════════════════════════════════════════════════════════════════════
 def main():
     inject_css()
+    inject_rtl_css()
     init_db()
     init_db_v3()
     init_db_v4()
