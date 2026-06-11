@@ -1126,7 +1126,7 @@ def init_db_v4():
         ('cadres_insuffisants', 5, 1, 'Moins de 5 cadres de couvain');
     """)
 
-    # Tables élevage reines v5 – impérativement créées ici, avant le commit
+    # Tables élevage reines v5
     c.executescript("""
     CREATE TABLE IF NOT EXISTS elevage_reines (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1176,6 +1176,67 @@ def init_db_v4():
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
     """)
+    conn.commit()
+    conn.close()
+
+
+def init_db_v5():
+    """Migration sécurisée v5 — crée les tables manquantes sans toucher aux données existantes."""
+    conn = get_db()
+    c = conn.cursor()
+    # Vérifie et crée chaque table individuellement avec try/except
+    tables_v5 = [
+        """CREATE TABLE IF NOT EXISTS elevage_reines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nom TEXT NOT NULL,
+            ruche_donneuse_id INTEGER REFERENCES ruches(id) ON DELETE SET NULL,
+            ruche_eleveuse_id INTEGER REFERENCES ruches(id) ON DELETE SET NULL,
+            methode TEXT DEFAULT 'Doolittle',
+            date_greffe TEXT,
+            date_operculee TEXT,
+            date_emergence TEXT,
+            nb_cellules_greffees INTEGER DEFAULT 0,
+            nb_cellules_acceptees INTEGER DEFAULT 0,
+            qualite TEXT DEFAULT 'standard',
+            statut TEXT DEFAULT 'en_cours',
+            race TEXT,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS cellules_royales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            elevage_id INTEGER REFERENCES elevage_reines(id) ON DELETE CASCADE,
+            ruche_id INTEGER REFERENCES ruches(id) ON DELETE SET NULL,
+            numero INTEGER,
+            stade TEXT DEFAULT 'oeuf',
+            date_greffe TEXT,
+            date_operculee TEXT,
+            date_emergence TEXT,
+            poids_mg REAL,
+            longueur_mm REAL,
+            qualite TEXT DEFAULT 'bonne',
+            statut TEXT DEFAULT 'en_developpement',
+            reine_resultante_id INTEGER,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""",
+        """CREATE TABLE IF NOT EXISTS elevage_males (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ruche_id INTEGER REFERENCES ruches(id) ON DELETE SET NULL,
+            race TEXT,
+            date_debut TEXT,
+            nb_cadres_males INTEGER DEFAULT 0,
+            qualite_sperme TEXT DEFAULT 'non_evalue',
+            reine_inseminee_id INTEGER,
+            notes TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )""",
+    ]
+    for ddl in tables_v5:
+        try:
+            c.execute(ddl)
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -1835,7 +1896,7 @@ def widget_ia_selector():
         📊 <b>Quota :</b> {cfg['quota']}<br>
         🖼️ <b>Vision (photo) :</b> {'✅ Oui' if cfg['vision'] else '❌ Texte seul'}<br>
         🔑 <b>Obtenir la clé :</b> <a href='{cfg['url']}' target='_blank'>{cfg['url']}</a>
-        {f"<br>⚠️ <b>Note :</b> {cfg['note']}" if cfg.get("note") else ""}
+        {f"<br>⚠️ <b>Note :</b> {cfg['note']}" if cfg.get('note') else ""}
         </div>
         """, unsafe_allow_html=True)
 
@@ -4439,13 +4500,20 @@ def page_elevage_reines():
     conn = get_db()
     ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
     opts_ruches = {r[1]: r[0] for r in ruches}
+    if not opts_ruches:
+        st.warning("⚠️ Aucune ruche active. Ajoutez des ruches d'abord." if get_lang()=="fr" else
+                   "⚠️ No active hives. Add hives first." if get_lang()=="en" else
+                   "⚠️ لا توجد خلايا نشطة. أضف خلايا أولاً.")
+        conn.close()
+        return
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        T("tab_elevage_reines"),
-        T("tab_elevage_males"),
-        T("tab_generation"),
-        "📊 Stats"
-    ])
+    _tab_labels = {
+        "fr": ["👑 Élevage reines", "♂️ Élevage mâles", "🌳 Générations", "📊 Stats"],
+        "en": ["👑 Queen Rearing",  "♂️ Drone Rearing",  "🌳 Generations",   "📊 Stats"],
+        "ar": ["👑 تربية الملكات",   "♂️ تربية الذكور",   "🌳 الأجيال",       "📊 إحصاء"],
+    }
+    tab_labels = _tab_labels.get(get_lang(), _tab_labels["fr"])
+    tab1, tab2, tab3, tab4 = st.tabs(tab_labels)
 
     # ── ONGLET 1 : ÉLEVAGE REINES ──────────────────────────────────────────
     with tab1:
@@ -4501,16 +4569,20 @@ def page_elevage_reines():
                 st.rerun()
 
         with col_list:
-            st.markdown("### 📋 Lots d'élevage en cours")
-            df_lots = pd.read_sql("""
-                SELECT er.id, er.nom, er.methode, er.race, er.date_greffe, er.date_emergence,
-                       er.nb_cellules_greffees, er.nb_cellules_acceptees, er.qualite, er.statut,
-                       rd.nom as ruche_donneuse, re.nom as ruche_eleveuse
-                FROM elevage_reines er
-                LEFT JOIN ruches rd ON rd.id = er.ruche_donneuse_id
-                LEFT JOIN ruches re ON re.id = er.ruche_eleveuse_id
-                ORDER BY er.date_greffe DESC
-            """, conn)
+            st.markdown("### 📋 " + ("Lots en cours" if get_lang()=="fr" else "Current Batches" if get_lang()=="en" else "الدفعات الجارية"))
+            try:
+                df_lots = pd.read_sql("""
+                    SELECT er.id, er.nom, er.methode, er.race, er.date_greffe, er.date_emergence,
+                           er.nb_cellules_greffees, er.nb_cellules_acceptees, er.qualite, er.statut,
+                           rd.nom as ruche_donneuse, re.nom as ruche_eleveuse
+                    FROM elevage_reines er
+                    LEFT JOIN ruches rd ON rd.id = er.ruche_donneuse_id
+                    LEFT JOIN ruches re ON re.id = er.ruche_eleveuse_id
+                    ORDER BY er.date_greffe DESC
+                """, conn)
+            except Exception as e:
+                st.error(f"DB Error: {e}")
+                df_lots = pd.DataFrame()
 
             if not df_lots.empty:
                 today_str = str(datetime.date.today())
@@ -4556,33 +4628,39 @@ def page_elevage_reines():
                             conn.commit()
                             st.rerun()
             else:
-                st.info("Aucun lot d'élevage enregistré.")
+                st.info("Aucun lot enregistré." if get_lang()=="fr" else "No batches yet." if get_lang()=="en" else "لا توجد دفعات.")
 
     # ── ONGLET 2 : ÉLEVAGE MÂLES ───────────────────────────────────────────
     with tab2:
         aide_contextuelle(
-            "Les mâles (faux-bourdons) sont essentiels pour l'insémination naturelle des reines. Une bonne colonie de mâles doit avoir des cadres de couvain de mâle sain.",
-            "Planifiez vos colonies de mâles 1 mois avant vos élevages de reines. Choisissez des colonies avec les meilleures performances (miel, douceur).",
-            "L'insémination instrumentale (IA) permet un contrôle total de la génétique. Évaluez la qualité du sperme : mobilité, concentration, morphologie."
+            "Les mâles (faux-bourdons) sont essentiels pour l'insémination naturelle des reines. Une bonne colonie doit avoir des cadres de couvain de mâle sain.",
+            "Planifiez vos colonies de mâles 1 mois avant vos élevages de reines. Choisissez des colonies avec les meilleures performances.",
+            "L'insémination instrumentale permet un contrôle total de la génétique. Évaluez la qualité du sperme : mobilité, concentration, morphologie."
         )
 
         col_mf, col_ml = st.columns([1, 1.5])
 
         with col_mf:
-            st.markdown("### ➕ Colonie de mâles")
+            _add_drone = {"fr": "### ➕ Colonie de mâles", "en": "### ➕ Drone Colony", "ar": "### ➕ مستعمرة الذكور"}
+            st.markdown(_add_drone.get(get_lang(), _add_drone["fr"]))
             with st.form("form_males"):
-                ruche_m = st.selectbox("Ruche productrice de mâles", list(opts_ruches.keys()), key="m_ruche")
+                _drone_lbl = {"fr": "Ruche productrice de mâles", "en": "Drone-producing hive", "ar": "خلية إنتاج الذكور"}
+                ruche_m = st.selectbox(_drone_lbl.get(get_lang(), _drone_lbl["fr"]), list(opts_ruches.keys()), key="m_ruche")
                 race_m = st.selectbox("Race", ["intermissa", "sahariensis", "ligustica", "carnica", "buckfast", "hybride"])
-                date_m = st.date_input("Date début", datetime.date.today())
-                nb_cadres_m = st.number_input("Nb cadres de mâles", 0, 10, 2)
+                _date_lbl = {"fr": "Date début", "en": "Start date", "ar": "تاريخ البدء"}
+                date_m = st.date_input(_date_lbl.get(get_lang(), _date_lbl["fr"]), datetime.date.today())
+                _frames_lbl = {"fr": "Nb cadres de mâles", "en": "Nb drone frames", "ar": "عدد أطر الذكور"}
+                nb_cadres_m = st.number_input(_frames_lbl.get(get_lang(), _frames_lbl["fr"]), 0, 10, 2)
                 
                 if niv == "expert":
-                    qualite_sperme = st.selectbox("Qualité sperme", ["non_évalué", "bonne", "excellente", "médiocre"])
+                    _sperme_lbl = {"fr": "Qualité sperme", "en": "Sperm quality", "ar": "جودة السائل المنوي"}
+                    qualite_sperme = st.selectbox(_sperme_lbl.get(get_lang(), _sperme_lbl["fr"]),
+                                                   ["non_évalué", "bonne", "excellente", "médiocre"])
                 else:
                     qualite_sperme = "non_évalué"
                 
-                notes_m = st.text_area("Notes", height=60)
-                sub_m = st.form_submit_button("✅ Enregistrer")
+                notes_m = st.text_area(T("notes"), height=60)
+                sub_m = st.form_submit_button("✅ " + ("Enregistrer" if get_lang()=="fr" else "Save" if get_lang()=="en" else "حفظ"))
 
             if sub_m:
                 conn.execute("""
@@ -4595,40 +4673,55 @@ def page_elevage_reines():
                 st.rerun()
 
         with col_ml:
-            st.markdown("### 📋 Colonies de mâles")
-            df_males = pd.read_sql("""
-                SELECT em.id, r.nom as ruche, em.race, em.date_debut, em.nb_cadres_males, em.qualite_sperme, em.notes
-                FROM elevage_males em LEFT JOIN ruches r ON r.id = em.ruche_id
-                ORDER BY em.date_debut DESC
-            """, conn)
+            _drone_list_title = {"fr": "### 📋 Colonies de mâles", "en": "### 📋 Drone Colonies", "ar": "### 📋 مستعمرات الذكور"}
+            st.markdown(_drone_list_title.get(get_lang(), _drone_list_title["fr"]))
+            try:
+                df_males = pd.read_sql("""
+                    SELECT em.id, r.nom as ruche, em.race, em.date_debut, em.nb_cadres_males, em.qualite_sperme, em.notes
+                    FROM elevage_males em LEFT JOIN ruches r ON r.id = em.ruche_id
+                    ORDER BY em.date_debut DESC
+                """, conn)
+            except Exception as e:
+                st.error(f"DB Error: {e}")
+                df_males = pd.DataFrame()
             if not df_males.empty:
                 st.dataframe(df_males, use_container_width=True, hide_index=True)
             else:
-                st.info("Aucune colonie de mâles enregistrée.")
+                _no_drone = {"fr": "Aucune colonie de mâles enregistrée.", "en": "No drone colonies yet.", "ar": "لا توجد مستعمرات ذكور."}
+                st.info(_no_drone.get(get_lang(), _no_drone["fr"]))
 
     # ── ONGLET 3 : GÉNÉRATIONS ─────────────────────────────────────────────
     with tab3:
-        st.markdown("### 🌳 Arbre des générations")
+        _gen_title = {"fr": "### 🌳 Arbre des générations", "en": "### 🌳 Generation Tree", "ar": "### 🌳 شجرة الأجيال"}
+        st.markdown(_gen_title.get(get_lang(), _gen_title["fr"]))
         aide_contextuelle(
-            "Chaque reine a une mère. En cliquant sur une reine dans la liste Pedigree, vous voyez son arbre généalogique.",
+            "Chaque reine a une mère. Visualisez les liens de parenté pour éviter la consanguinité.",
             "Visualisez les liens de parenté pour éviter la consanguinité. Idéal d'alterner les races de mâles toutes les 3-4 générations.",
-            "Analysez les traits héréditaires : taux de miel par génération, résistance Varroa, douceur. Exportez l'arbre pour documenter votre programme de sélection."
+            "Analysez les traits héréditaires : taux de miel par génération, résistance Varroa, douceur."
         )
         
-        df_reines_gen = pd.read_sql("""
-            SELECT r1.id, r1.nom, r1.race, r1.date_naissance, r1.qualite,
-                   r2.nom as mere_nom, r3.nom as pere_nom,
-                   ru.nom as ruche_nom
-            FROM reines r1
-            LEFT JOIN reines r2 ON r2.id = r1.mere_id
-            LEFT JOIN reines r3 ON r3.id = r1.pere_id
-            LEFT JOIN ruches ru ON ru.id = r1.ruche_id
-            ORDER BY r1.date_naissance
-        """, conn)
+        try:
+            df_reines_gen = pd.read_sql("""
+                SELECT r1.id, r1.nom, r1.race, r1.date_naissance, r1.qualite,
+                       r2.nom as mere_nom, r3.nom as pere_nom,
+                       ru.nom as ruche_nom
+                FROM reines r1
+                LEFT JOIN reines r2 ON r2.id = r1.mere_id
+                LEFT JOIN reines r3 ON r3.id = r1.pere_id
+                LEFT JOIN ruches ru ON ru.id = r1.ruche_id
+                ORDER BY r1.date_naissance
+            """, conn)
+        except Exception as e:
+            st.error(f"DB Error: {e}")
+            df_reines_gen = pd.DataFrame()
         
         if df_reines_gen.empty:
-            st.info("Aucune reine enregistrée. Ajoutez des reines dans la page Pedigree.")
+            _no_queens = {"fr": "Aucune reine enregistrée. Ajoutez des reines dans la page Pedigree.", 
+                          "en": "No queens registered. Add queens in the Pedigree page.",
+                          "ar": "لا توجد ملكات مسجلة. أضف ملكات في صفحة سجل الأنساب."}
+            st.info(_no_queens.get(get_lang(), _no_queens["fr"]))
         else:
+            # Affichage visuel des générations
             # Déterminer la génération de chaque reine
             def get_generation(reine_id, df, visited=None):
                 if visited is None:
@@ -4674,19 +4767,25 @@ def page_elevage_reines():
 
     # ── ONGLET 4 : STATS ───────────────────────────────────────────────────
     with tab4:
-        st.markdown("### 📊 Statistiques d'élevage")
-        df_stats_elv = pd.read_sql("""
-            SELECT methode,
-                   COUNT(*) as nb_lots,
-                   SUM(nb_cellules_greffees) as total_greffees,
-                   SUM(nb_cellules_acceptees) as total_acceptees,
-                   ROUND(AVG(CASE WHEN nb_cellules_greffees > 0 
-                       THEN nb_cellules_acceptees * 100.0 / nb_cellules_greffees ELSE 0 END), 1) as taux_moyen
-            FROM elevage_reines GROUP BY methode
-        """, conn)
+        _stats_title = {"fr": "### 📊 Statistiques d'élevage", "en": "### 📊 Rearing Statistics", "ar": "### 📊 إحصائيات التربية"}
+        st.markdown(_stats_title.get(get_lang(), _stats_title["fr"]))
+        try:
+            df_stats_elv = pd.read_sql("""
+                SELECT methode,
+                       COUNT(*) as nb_lots,
+                       SUM(nb_cellules_greffees) as total_greffees,
+                       SUM(nb_cellules_acceptees) as total_acceptees,
+                       ROUND(AVG(CASE WHEN nb_cellules_greffees > 0 
+                           THEN nb_cellules_acceptees * 100.0 / nb_cellules_greffees ELSE 0 END), 1) as taux_moyen
+                FROM elevage_reines GROUP BY methode
+            """, conn)
+        except Exception as e:
+            st.error(f"DB Error: {e}")
+            df_stats_elv = pd.DataFrame()
         if not df_stats_elv.empty:
+            _chart_title = {"fr": "Taux d'acceptation par méthode (%)", "en": "Acceptance rate by method (%)", "ar": "نسبة القبول حسب الطريقة (%)"}
             fig_elv = px.bar(df_stats_elv, x="methode", y="taux_moyen",
-                             title="Taux d'acceptation par méthode (%)",
+                             title=_chart_title.get(get_lang(), _chart_title["fr"]),
                              color="taux_moyen", color_continuous_scale="RdYlGn",
                              template="plotly_white")
             fig_elv.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -4694,7 +4793,8 @@ def page_elevage_reines():
             st.plotly_chart(fig_elv, use_container_width=True)
             st.dataframe(df_stats_elv, use_container_width=True, hide_index=True)
         else:
-            st.info("Aucune donnée d'élevage disponible.")
+            _no_data = {"fr": "Aucune donnée d'élevage disponible.", "en": "No rearing data yet.", "ar": "لا توجد بيانات تربية بعد."}
+            st.info(_no_data.get(get_lang(), _no_data["fr"]))
 
     conn.close()
 
@@ -4711,7 +4811,10 @@ def page_cellules_royales():
     conn = get_db()
 
     # Récupérer les lots d'élevage
-    lots = conn.execute("SELECT id, nom FROM elevage_reines ORDER BY date_greffe DESC").fetchall()
+    try:
+        lots = conn.execute("SELECT id, nom FROM elevage_reines ORDER BY date_greffe DESC").fetchall()
+    except Exception:
+        lots = []
     ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
     opts_lots = {r[1]: r[0] for r in lots}
     opts_ruches = {r[1]: r[0] for r in ruches}
@@ -4725,19 +4828,26 @@ def page_cellules_royales():
     tab_list, tab_add, tab_timeline = st.tabs(["📋 Suivi cellules", "➕ Ajouter", "📅 Timeline"])
 
     with tab_list:
-        df_cells = pd.read_sql("""
-            SELECT cr.id, cr.numero, er.nom as lot, cr.stade, cr.date_greffe,
-                   cr.date_operculee, cr.date_emergence, cr.qualite, cr.statut,
-                   cr.poids_mg, cr.longueur_mm, cr.notes,
-                   r.nom as ruche
-            FROM cellules_royales cr
-            LEFT JOIN elevage_reines er ON er.id = cr.elevage_id
-            LEFT JOIN ruches r ON r.id = cr.ruche_id
-            ORDER BY cr.date_greffe DESC, cr.numero
-        """, conn)
+        try:
+            df_cells = pd.read_sql("""
+                SELECT cr.id, cr.numero, er.nom as lot, cr.stade, cr.date_greffe,
+                       cr.date_operculee, cr.date_emergence, cr.qualite, cr.statut,
+                       cr.poids_mg, cr.longueur_mm, cr.notes,
+                       r.nom as ruche
+                FROM cellules_royales cr
+                LEFT JOIN elevage_reines er ON er.id = cr.elevage_id
+                LEFT JOIN ruches r ON r.id = cr.ruche_id
+                ORDER BY cr.date_greffe DESC, cr.numero
+            """, conn)
+        except Exception as e:
+            st.error(f"DB Error: {e}")
+            df_cells = pd.DataFrame()
 
         if df_cells.empty:
-            st.info("Aucune cellule royale enregistrée. Ajoutez-en ci-dessous.")
+            _no_cells = {"fr": "Aucune cellule royale enregistrée. Ajoutez-en ci-dessous.", 
+                         "en": "No royal cells registered yet. Add one below.",
+                         "ar": "لا توجد خلايا ملكية مسجلة. أضف واحدة أدناه."}
+            st.info(_no_cells.get(get_lang(), _no_cells["fr"]))
         else:
             # Mise à jour du stade automatique
             today = datetime.date.today()
@@ -4777,31 +4887,40 @@ def page_cellules_royales():
                     st.rerun()
 
     with tab_add:
-        st.markdown("### ➕ Ajouter des cellules royales")
+        _add_title = {"fr": "### ➕ Ajouter des cellules royales", "en": "### ➕ Add Royal Cells", "ar": "### ➕ إضافة خلايا ملكية"}
+        st.markdown(_add_title.get(get_lang(), _add_title["fr"]))
         with st.form("form_cellule"):
             col1, col2 = st.columns(2)
-            lot_sel = col1.selectbox("Lot d'élevage", list(opts_lots.keys()) if opts_lots else ["—"])
-            ruche_sel = col2.selectbox("Ruche destination", list(opts_ruches.keys()))
+            _lot_lbl = {"fr": "Lot d'élevage", "en": "Rearing batch", "ar": "دفعة التربية"}
+            _ruche_dest = {"fr": "Ruche destination", "en": "Destination hive", "ar": "خلية الوجهة"}
+            lot_sel = col1.selectbox(_lot_lbl.get(get_lang(), _lot_lbl["fr"]), list(opts_lots.keys()) if opts_lots else ["—"])
+            ruche_sel = col2.selectbox(_ruche_dest.get(get_lang(), _ruche_dest["fr"]), list(opts_ruches.keys()) if opts_ruches else ["—"])
             
             col3, col4 = st.columns(2)
-            numero = col3.number_input("N° cellule", 1, 999, 1)
-            stade_init = col4.selectbox("Stade initial", ["oeuf", "larve", "operculée"])
+            _num_lbl = {"fr": "N° cellule", "en": "Cell #", "ar": "رقم الخلية"}
+            _stade_lbl = {"fr": "Stade initial", "en": "Initial stage", "ar": "المرحلة الأولية"}
+            numero = col3.number_input(_num_lbl.get(get_lang(), _num_lbl["fr"]), 1, 999, 1)
+            stade_init = col4.selectbox(_stade_lbl.get(get_lang(), _stade_lbl["fr"]), ["oeuf", "larve", "operculée"])
             
             col5, col6 = st.columns(2)
-            date_greffe_c = col5.date_input("Date greffe", datetime.date.today())
-            qualite_c = col6.selectbox("Qualité estimée", ["bonne", "excellente", "médiocre", "inconnue"])
+            date_greffe_c = col5.date_input(T("date_greffe"), datetime.date.today())
+            _qual_lbl = {"fr": "Qualité estimée", "en": "Estimated quality", "ar": "الجودة المقدرة"}
+            qualite_c = col6.selectbox(_qual_lbl.get(get_lang(), _qual_lbl["fr"]), ["bonne", "excellente", "médiocre", "inconnue"])
             
             if niv == "expert":
                 col7, col8 = st.columns(2)
-                poids_c = col7.number_input("Poids (mg)", 0.0, 1000.0, 0.0, step=10.0)
-                longueur_c = col8.number_input("Longueur (mm)", 0.0, 40.0, 0.0, step=0.5)
+                _poids_lbl = {"fr": "Poids (mg)", "en": "Weight (mg)", "ar": "الوزن (ملغ)"}
+                _lon_lbl = {"fr": "Longueur (mm)", "en": "Length (mm)", "ar": "الطول (مم)"}
+                poids_c = col7.number_input(_poids_lbl.get(get_lang(), _poids_lbl["fr"]), 0.0, 1000.0, 0.0, step=10.0)
+                longueur_c = col8.number_input(_lon_lbl.get(get_lang(), _lon_lbl["fr"]), 0.0, 40.0, 0.0, step=0.5)
             else:
                 poids_c, longueur_c = 0.0, 0.0
             
-            notes_c = st.text_area("Notes", height=60)
-            sub_c = st.form_submit_button("✅ Enregistrer")
+            notes_c = st.text_area(T("notes"), height=60)
+            _save_btn = {"fr": "✅ Enregistrer", "en": "✅ Save", "ar": "✅ حفظ"}
+            sub_c = st.form_submit_button(_save_btn.get(get_lang(), _save_btn["fr"]))
 
-        if sub_c and opts_lots:
+        if sub_c and opts_lots and ruche_sel in opts_ruches:
             date_op_c = date_greffe_c + datetime.timedelta(days=8)
             date_em_c = date_greffe_c + datetime.timedelta(days=16)
             lot_id = opts_lots.get(lot_sel)
@@ -4814,18 +4933,26 @@ def page_cellules_royales():
                   str(date_op_c), str(date_em_c), qualite_c, poids_c or None, longueur_c or None, notes_c))
             conn.commit()
             log_action("Cellule royale ajoutée", f"Lot {lot_sel} — N°{numero} — {stade_init}")
-            st.success(f"✅ Cellule #{numero} enregistrée. Émergence prévue : {date_em_c}")
+            _succ = {"fr": f"✅ Cellule #{numero} enregistrée. Émergence prévue : {date_em_c}",
+                     "en": f"✅ Cell #{numero} saved. Expected emergence: {date_em_c}",
+                     "ar": f"✅ تم حفظ الخلية #{numero}. الخروج المتوقع: {date_em_c}"}
+            st.success(_succ.get(get_lang(), _succ["fr"]))
             st.rerun()
 
     with tab_timeline:
-        st.markdown("### 📅 Timeline des cellules")
-        df_tl = pd.read_sql("""
-            SELECT cr.numero, er.nom as lot, cr.date_greffe, cr.date_operculee, cr.date_emergence, cr.stade, cr.qualite
-            FROM cellules_royales cr
-            LEFT JOIN elevage_reines er ON er.id = cr.elevage_id
-            WHERE cr.date_greffe IS NOT NULL
-            ORDER BY cr.date_greffe
-        """, conn)
+        _tl_title = {"fr": "### 📅 Timeline des cellules", "en": "### 📅 Cell Timeline", "ar": "### 📅 جدول الخلايا الزمني"}
+        st.markdown(_tl_title.get(get_lang(), _tl_title["fr"]))
+        try:
+            df_tl = pd.read_sql("""
+                SELECT cr.numero, er.nom as lot, cr.date_greffe, cr.date_operculee, cr.date_emergence, cr.stade, cr.qualite
+                FROM cellules_royales cr
+                LEFT JOIN elevage_reines er ON er.id = cr.elevage_id
+                WHERE cr.date_greffe IS NOT NULL
+                ORDER BY cr.date_greffe
+            """, conn)
+        except Exception as e:
+            st.error(f"DB Error: {e}")
+            df_tl = pd.DataFrame()
         
         if not df_tl.empty:
             # Crée un Gantt simplifié avec plotly
@@ -4873,6 +5000,7 @@ def main():
     init_db()
     init_db_v3()
     init_db_v4()
+    init_db_v5()
 
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
