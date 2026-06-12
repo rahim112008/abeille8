@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 ApiTrack Pro – Application de gestion apicole professionnelle
 Streamlit + Python + SQLite
@@ -1242,6 +1243,48 @@ def init_db_v5():
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# MIGRATION SAFE — ensure_columns()
+# Garantit que toutes les colonnes critiques existent sur DB déjà créées
+# ════════════════════════════════════════════════════════════════════════════
+def ensure_columns():
+    """Ajoute les colonnes manquantes sans erreur (idempotent)."""
+    conn = get_db()
+    c = conn.cursor()
+    critical_columns = [
+        ("cellules_royales", "numero",               "INTEGER"),
+        ("cellules_royales", "elevage_id",            "INTEGER"),
+        ("cellules_royales", "ruche_id",              "INTEGER"),
+        ("cellules_royales", "stade",                 "TEXT DEFAULT 'oeuf'"),
+        ("cellules_royales", "date_greffe",           "TEXT"),
+        ("cellules_royales", "date_operculee",        "TEXT"),
+        ("cellules_royales", "date_emergence",        "TEXT"),
+        ("cellules_royales", "poids_mg",              "REAL"),
+        ("cellules_royales", "longueur_mm",           "REAL"),
+        ("cellules_royales", "qualite",               "TEXT DEFAULT 'bonne'"),
+        ("cellules_royales", "statut",                "TEXT DEFAULT 'en_developpement'"),
+        ("cellules_royales", "reine_resultante_id",   "INTEGER"),
+        ("cellules_royales", "notes",                 "TEXT"),
+        ("elevage_reines",   "race",                  "TEXT"),
+        ("elevage_reines",   "qualite",               "TEXT DEFAULT 'standard'"),
+        ("elevage_reines",   "statut",                "TEXT DEFAULT 'en_cours'"),
+        ("elevage_reines",   "nb_cellules_acceptees", "INTEGER DEFAULT 0"),
+        ("elevage_males",    "qualite_sperme",        "TEXT DEFAULT 'non_evalue'"),
+        ("reines",           "qualite",               "TEXT DEFAULT 'standard'"),
+        ("reines",           "origine",               "TEXT"),
+    ]
+    for table, col, col_type in critical_columns:
+        try:
+            c.execute(f"PRAGMA table_info({table})")
+            existing = [row[1] for row in c.fetchall()]
+            if col not in existing:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass  # Table absente — sera créée au prochain init_db
+    conn.commit()
+    conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # AUTHENTIFICATION (inchangée)
 # ════════════════════════════════════════════════════════════════════════════
 def check_login(username, password):
@@ -2429,7 +2472,7 @@ def page_dashboard():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : GESTION DES RUCHES (inchangée)
+# PAGE : GESTION DES RUCHES (avec messages multilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def page_ruches():
     st.markdown(T("ruches_title"))
@@ -2465,7 +2508,10 @@ def page_ruches():
                 conn.execute("DELETE FROM ruches WHERE id=?", (rid,))
                 conn.commit()
                 log_action("Suppression ruche", f"Ruche {selected} supprimée")
-                st.success(f"Ruche {selected} supprimée.")
+                _del_ok = {"fr": f"Ruche {selected} supprimée.",
+                           "en": f"Hive {selected} deleted.",
+                           "ar": f"تم حذف الخلية {selected}."}
+                st.success(_del_ok.get(get_lang(), _del_ok["fr"]))
                 st.rerun()
 
     with tab2:
@@ -2489,14 +2535,17 @@ def page_ruches():
             """, (nom, race, str(date_inst), localisation, lat, lon, notes))
             conn.commit()
             log_action("Ajout ruche", f"Ruche '{nom}' ({race}) ajoutée")
-            st.success(f"✅ Ruche '{nom}' ajoutée avec succès.")
+            _add_ok = {"fr": f"✅ Ruche '{nom}' ajoutée avec succès.",
+                       "en": f"✅ Hive '{nom}' added successfully.",
+                       "ar": f"✅ تمت إضافة الخلية '{nom}' بنجاح."}
+            st.success(_add_ok.get(get_lang(), _add_ok["fr"]))
             st.rerun()
 
     conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : INSPECTIONS (inchangée)
+# PAGE : INSPECTIONS (avec alertes trilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def page_inspections():
     st.markdown(T("insp_title"))
@@ -2561,19 +2610,26 @@ def page_inspections():
             """, (rid, str(date_insp), poids, cadres, varroa, int(reine), comportement, notes))
             conn.commit()
             log_action("Inspection enregistrée", f"Ruche {ruche_sel} — varroa {varroa}%")
+            _msg_crit = {"fr": f"⚠️ ALERTE CRITIQUE : Varroa {varroa}% sur {ruche_sel} — Traitement immédiat requis !",
+                         "en": f"⚠️ CRITICAL ALERT: Varroa {varroa}% on {ruche_sel} — Treat immediately!",
+                         "ar": f"⚠️ تنبيه حرج: فاروا {varroa}% على {ruche_sel} — العلاج الفوري مطلوب!"}
+            _msg_warn = {"fr": f"⚠️ Attention : Varroa {varroa}% sur {ruche_sel} — Surveillance renforcée.",
+                         "en": f"⚠️ Warning: Varroa {varroa}% on {ruche_sel} — Increase monitoring.",
+                         "ar": f"⚠️ تحذير: فاروا {varroa}% على {ruche_sel} — مراقبة مكثفة."}
+            _msg_ok   = {"fr": "✅ Inspection enregistrée.", "en": "✅ Inspection saved.", "ar": "✅ تم حفظ التفتيش."}
             if varroa >= 3.0:
-                st.error(f"⚠️ ALERTE CRITIQUE : Varroa {varroa}% sur {ruche_sel} — Traitement immédiat requis !")
+                st.error(_msg_crit.get(get_lang(), _msg_crit["fr"]))
             elif varroa >= 2.0:
-                st.warning(f"⚠️ Attention : Varroa {varroa}% sur {ruche_sel} — Surveillance renforcée.")
+                st.warning(_msg_warn.get(get_lang(), _msg_warn["fr"]))
             else:
-                st.success("✅ Inspection enregistrée.")
+                st.success(_msg_ok.get(get_lang(), _msg_ok["fr"]))
             st.rerun()
 
     conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : TRAITEMENTS (inchangée)
+# PAGE : TRAITEMENTS (message trilingue)
 # ════════════════════════════════════════════════════════════════════════════
 def page_traitements():
     st.markdown(T("trait_title"))
@@ -2629,14 +2685,15 @@ def page_traitements():
             """, (opts[ruche_sel], str(date_debut), str(date_fin), produit, pathologie, dose, duree, notes))
             conn.commit()
             log_action("Traitement débuté", f"Ruche {ruche_sel} — {produit} ({pathologie})")
-            st.success("✅ Traitement enregistré.")
+            _t_ok = {"fr": "✅ Traitement enregistré.", "en": "✅ Treatment saved.", "ar": "✅ تم تسجيل العلاج."}
+            st.success(_t_ok.get(get_lang(), _t_ok["fr"]))
             st.rerun()
 
     conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : PRODUCTIONS (inchangée)
+# PAGE : PRODUCTIONS (message trilingue)
 # ════════════════════════════════════════════════════════════════════════════
 def page_productions():
     st.markdown(T("prod_title"))
@@ -2718,14 +2775,17 @@ def page_productions():
                   hda if hda > 0 else None, qualite, notes))
             conn.commit()
             log_action("Récolte enregistrée", f"{quantite} kg de {type_prod} — ruche {ruche_sel}")
-            st.success(f"✅ {quantite} kg de {type_prod} enregistrés.")
+            _p_ok = {"fr": f"✅ {quantite} kg de {type_prod} enregistrés.",
+                     "en": f"✅ {quantite} kg of {type_prod} saved.",
+                     "ar": f"✅ {quantite} كغ من {type_prod} تم تسجيلها."}
+            st.success(_p_ok.get(get_lang(), _p_ok["fr"]))
             st.rerun()
 
     conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : MORPHOMÉTRIE IA (inchangée, mais avec photogrammétrie déjà intégrée)
+# PAGE : MORPHOMÉTRIE IA (avec message trilingue pour classification locale)
 # ════════════════════════════════════════════════════════════════════════════
 RUTTNER_REF = {
     "intermissa":   {"aile": (8.9, 9.4), "cubital": (2.0, 2.8), "glossa": (5.8, 6.3)},
@@ -3097,7 +3157,7 @@ def page_morpho():
                     )
                 _appliquer_mesures_auto(result)
 
-    # ── ONGLET 2 : ANALYSE + IA (inchangé) ──────────────────────────────────
+    # ── ONGLET 2 : ANALYSE + IA (avec message trilingue pour classification locale)
     with tab2:
         _auto_filled = st.session_state.get("morpho_notes_auto", "") != ""
         if _auto_filled:
@@ -3222,7 +3282,10 @@ def page_morpho():
                     "race_probable": race_prob, "specialisation": spec,
                 }
             }
-            st.success(f"✅ Classification locale sauvegardée : **{race_prob}** ({confiance}%)")
+            _mo_ok = {"fr": f"✅ Classification locale sauvegardée : **{race_prob}** ({confiance}%)",
+                      "en": f"✅ Local classification saved: **{race_prob}** ({confiance}%)",
+                      "ar": f"✅ تم حفظ التصنيف المحلي: **{race_prob}** ({confiance}%)"}
+            st.success(_mo_ok.get(get_lang(), _mo_ok["fr"]))
             st.download_button("⬇️ Télécharger JSON", json.dumps(result_json, indent=2, ensure_ascii=False),
                                f"morpho_{datetime.date.today()}.json", "application/json")
 
@@ -3272,7 +3335,7 @@ def page_morpho():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : CARTOGRAPHIE (inchangée)
+# PAGE : CARTOGRAPHIE (messages trilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def page_carto():
     st.markdown(T("carto_title"))
@@ -3453,7 +3516,10 @@ def page_carto():
                                   description[:100], "élevé", "[IA] " + description[:200]))
                             conn.commit()
                             log_action("Zone sauvegardée depuis analyse IA", nom_z)
-                            st.success(f"✅ Zone '{nom_z}' sauvegardée dans la cartographie !")
+                            _z_ok = {"fr": f"✅ Zone '{nom_z}' sauvegardée dans la cartographie !",
+                                     "en": f"✅ Zone '{nom_z}' saved to the map!",
+                                     "ar": f"✅ تم حفظ المنطقة '{nom_z}' في الخريطة!"}
+                            st.success(_z_ok.get(get_lang(), _z_ok["fr"]))
                 elif resultat:
                     st.error(resultat)
 
@@ -3481,7 +3547,10 @@ def page_carto():
             """, (nom, type_zone, lat, lon, superficie, flore, ndvi, potentiel, notes))
             conn.commit()
             log_action("Zone ajoutée", f"Zone '{nom}' — {flore} — NDVI {ndvi}")
-            st.success(f"✅ Zone '{nom}' ajoutée.")
+            _za_ok = {"fr": f"✅ Zone '{nom}' ajoutée.",
+                      "en": f"✅ Zone '{nom}' added.",
+                      "ar": f"✅ تمت إضافة المنطقة '{nom}'"}
+            st.success(_za_ok.get(get_lang(), _za_ok["fr"]))
             st.rerun()
 
     conn.close()
@@ -3542,7 +3611,7 @@ def _afficher_diagnostic_zone(result, nom_zone):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : ASSISTANT VOCAL D'INSPECTION
+# PAGE : ASSISTANT VOCAL D'INSPECTION (messages trilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def page_assistant_vocal():
     st.markdown(T("vocal_title"))
@@ -3656,7 +3725,10 @@ def page_assistant_vocal():
                     st.session_state['vocal_comportement'] = result.get('comportement', 'calme')
                     st.session_state['vocal_poids'] = result.get('poids_kg', 25.0)
                     st.session_state['vocal_notes'] = result.get('notes', '')
-                    st.success("✅ Données extraites. Vérifiez et enregistrez l'inspection ci-dessous.")
+                    _vex_ok = {"fr": "✅ Données extraites. Vérifiez et enregistrez l'inspection ci-dessous.",
+                               "en": "✅ Data extracted. Review and save the inspection below.",
+                               "ar": "✅ تم استخراج البيانات. راجع وسجّل التفتيش أدناه."}
+                    st.success(_vex_ok.get(get_lang(), _vex_ok["fr"]))
                 else:
                     st.error(f"Erreur IA : {result.get('error')}")
 
@@ -3690,7 +3762,10 @@ def page_assistant_vocal():
         """, (rid, str(date_insp), texte_manuel or st.session_state.get('voice_text_to_analyze',''), varroa, cadres, int(reine), comportement, poids, notes))
         conn.commit()
         log_action("Inspection vocale", f"Ruche {ruche_sel} — varroa {varroa}%")
-        st.success("✅ Inspection enregistrée (source vocale).")
+        _v_ok = {"fr": "✅ Inspection enregistrée (source vocale).",
+                 "en": "✅ Inspection saved (voice source).",
+                 "ar": "✅ تم حفظ التفتيش (مصدر صوتي)."}
+        st.success(_v_ok.get(get_lang(), _v_ok["fr"]))
         st.rerun()
 
     # Historique des inspections vocales
@@ -3709,7 +3784,7 @@ def page_assistant_vocal():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : SCANNER DE CADRE IA
+# PAGE : SCANNER DE CADRE IA (messages trilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def page_scanner_cadre():
     st.markdown(T("scanner_title"))
@@ -3729,7 +3804,8 @@ def page_scanner_cadre():
                 img_bytes = img_file.read()
                 result = analyser_cadre_ia(img_bytes)
             if "error" not in result:
-                st.success("✅ Analyse terminée")
+                _sc_ok = {"fr": "✅ Analyse terminée", "en": "✅ Analysis complete", "ar": "✅ اكتمل التحليل"}
+                st.success(_sc_ok.get(get_lang(), _sc_ok["fr"]))
                 col1, col2 = st.columns(2)
                 col1.metric("🐝 Abeilles détectées", result.get("nb_abeilles", "N/A"))
                 col2.metric("👑 Reine visible", "✅ Oui" if result.get("reine_detectee") else "❌ Non")
@@ -3740,7 +3816,8 @@ def page_scanner_cadre():
                 if maladies and "aucune" not in maladies:
                     st.error(f"⚠️ Maladies suspectées : {', '.join(maladies)}")
                 else:
-                    st.success("✅ Aucune maladie détectée")
+                    _sd_ok = {"fr": "✅ Aucune maladie détectée", "en": "✅ No diseases detected", "ar": "✅ لم يُكتشف أي مرض"}
+                    st.success(_sd_ok.get(get_lang(), _sd_ok["fr"]))
                 st.info(f"💡 Recommandation : {result.get('recommandations', 'Aucune')}")
                 st.caption(f"Commentaire : {result.get('commentaire', '')}")
 
@@ -4275,7 +4352,7 @@ def page_journal():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : ADMINISTRATION (inchangée)
+# PAGE : ADMINISTRATION (messages trilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def import_csv(table_name, df):
     """Insère les lignes d'un DataFrame dans la table spécifiée (ignore les colonnes non existantes)."""
@@ -4316,7 +4393,8 @@ def page_admin():
             conn.execute("INSERT OR REPLACE INTO settings VALUES ('localisation',?)", (new_loc,))
             conn.commit()
             log_action("Paramètres modifiés", f"Nom: {new_nom}, Localisation: {new_loc}")
-            st.success("✅ Paramètres sauvegardés.")
+            _as_ok = {"fr": "✅ Paramètres sauvegardés.", "en": "✅ Settings saved.", "ar": "✅ تم حفظ الإعدادات."}
+            st.success(_as_ok.get(get_lang(), _as_ok["fr"]))
 
     with tab2:
         st.markdown("### 🤖 Gestion des fournisseurs IA — Tous gratuits")
@@ -4380,7 +4458,10 @@ def page_admin():
             conn.commit()
             conn.close()
             log_action("Fournisseur IA configuré", f"{prov_sel} / {sel_model_admin}")
-            st.success(f"✅ {prov_sel} configuré et activé · Modèle : {sel_model_admin}")
+            _ai_ok = {"fr": f"✅ {prov_sel} activé — modèle {sel_model_admin}",
+                      "en": f"✅ {prov_sel} activated — model {sel_model_admin}",
+                      "ar": f"✅ تم تفعيل {prov_sel} — النموذج {sel_model_admin}"}
+            st.success(_ai_ok.get(get_lang(), _ai_ok["fr"]))
             st.rerun()
         if delete:
             conn = get_db()
@@ -4421,7 +4502,8 @@ def page_admin():
                              (new_hash, st.session_state.username))
                 conn.commit()
                 log_action("Changement mot de passe", "Mot de passe modifié avec succès")
-                st.success("✅ Mot de passe modifié.")
+                _pw_ok = {"fr": "✅ Mot de passe modifié.", "en": "✅ Password changed.", "ar": "✅ تم تغيير كلمة المرور."}
+                st.success(_pw_ok.get(get_lang(), _pw_ok["fr"]))
 
     with tab4:
         st.markdown("**Sauvegarde de la base**")
@@ -4466,7 +4548,7 @@ def page_admin():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : ÉLEVAGE REINES & MÂLES
+# PAGE : ÉLEVAGE REINES & MÂLES (messages trilingues)
 # ════════════════════════════════════════════════════════════════════════════
 def get_niveau():
     return st.session_state.get("niveau_user", "intermediaire")
@@ -4501,9 +4583,10 @@ def page_elevage_reines():
     ruches = conn.execute("SELECT id, nom FROM ruches WHERE statut='actif'").fetchall()
     opts_ruches = {r[1]: r[0] for r in ruches}
     if not opts_ruches:
-        st.warning("⚠️ Aucune ruche active. Ajoutez des ruches d'abord." if get_lang()=="fr" else
-                   "⚠️ No active hives. Add hives first." if get_lang()=="en" else
-                   "⚠️ لا توجد خلايا نشطة. أضف خلايا أولاً.")
+        _nr_warn = {"fr": "⚠️ Aucune ruche active. Ajoutez des ruches d'abord.",
+                    "en": "⚠️ No active hives. Add hives first.",
+                    "ar": "⚠️ لا توجد خلايا نشطة. أضف خلايا أولاً."}
+        st.warning(_nr_warn.get(get_lang(), _nr_warn["fr"]))
         conn.close()
         return
 
@@ -4565,7 +4648,10 @@ def page_elevage_reines():
                       str(date_greffe), str(date_op), str(date_em), nb_greffes, qualite, race, notes))
                 conn.commit()
                 log_action("Élevage reine créé", f"Lot {nom_lot} — méthode {methode}")
-                st.success(f"✅ Lot '{nom_lot}' créé ! Émergence prévue : {date_em}")
+                _elv_ok = {"fr": f"✅ Lot '{nom_lot}' créé ! Émergence prévue : {date_em}",
+                           "en": f"✅ Batch '{nom_lot}' created! Expected emergence: {date_em}",
+                           "ar": f"✅ تم إنشاء الدفعة '{nom_lot}'! الخروج المتوقع: {date_em}"}
+                st.success(_elv_ok.get(get_lang(), _elv_ok["fr"]))
                 st.rerun()
 
         with col_list:
@@ -4669,7 +4755,10 @@ def page_elevage_reines():
                 """, (opts_ruches[ruche_m], race_m, str(date_m), nb_cadres_m, qualite_sperme, notes_m))
                 conn.commit()
                 log_action("Colonie mâles enregistrée", f"Ruche {ruche_m} — race {race_m}")
-                st.success("✅ Colonie de mâles enregistrée.")
+                _m_ok = {"fr": "✅ Colonie de mâles enregistrée.",
+                         "en": "✅ Drone colony saved.",
+                         "ar": "✅ تم تسجيل مستعمرة الذكور."}
+                st.success(_m_ok.get(get_lang(), _m_ok["fr"]))
                 st.rerun()
 
         with col_ml:
@@ -4800,7 +4889,7 @@ def page_elevage_reines():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE : CELLULES ROYALES
+# PAGE : CELLULES ROYALES (inchangée, déjà multilingue via T())
 # ════════════════════════════════════════════════════════════════════════════
 def page_cellules_royales():
     st.markdown(T("cellules_title"))
@@ -5001,6 +5090,7 @@ def main():
     init_db_v3()
     init_db_v4()
     init_db_v5()
+    ensure_columns()  # ← Migration safe : garantit toutes les colonnes
 
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
@@ -5044,7 +5134,7 @@ def main():
     }
     st.markdown(f"""
     <div class='api-footer'>
-        🐝 ApiTrack Pro v4.0 ULTIMATE · Streamlit + Python + SQLite · Rucher de l'Atlas · 2025
+        🐝 ApiTrack Pro v4.1 ULTIMATE · Streamlit + Python + SQLite · Rucher de l'Atlas · 2026
         <br><span style='font-size:.65rem;color:#6B7A99'>{footer_texts.get(lang, footer_texts['fr'])}</span>
     </div>
     """, unsafe_allow_html=True)
